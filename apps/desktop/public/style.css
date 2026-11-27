@@ -1776,6 +1776,18 @@ body { display: flex; flex-direction: column; }
   outline-offset: -2px;
 }
 
+/* Keep the text off the side edges. Set on .xterm, whose padding the fit addon
+   subtracts when it counts the columns. */
+.terminal-container .xterm {
+  padding: 0 2px;
+}
+
+/* xterm.css paints this layer black, which would show in the padding: let the
+   container's theme background through. */
+.terminal-container .xterm .xterm-viewport {
+  background-color: transparent;
+}
+
 /* Prevent terminal content from rendering under xterm's scrollbar */
 .terminal-container .xterm-viewport {
   scrollbar-width: thin;
