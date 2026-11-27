@@ -82,6 +82,43 @@ test('errors and warnings are marked by severity', async () => {
   ]);
 });
 
+test('the scroller makes room for a shown minimap, so that no text goes under it', async () => {
+  const { MinimapView, MINIMAP_WIDTH } = await editorModule('minimap');
+  const element = () => ({ style: {}, setAttribute() {}, append() {}, appendChild() {}, addEventListener() {}, removeEventListener() {}, remove() {} });
+  globalThis.document = { createElement: element };
+  try {
+    const view = { dom: element(), scrollDOM: element(), requestMeasure() {} };
+    const map = new MinimapView(view);
+    assert.equal(view.scrollDOM.style.marginRight, `${MINIMAP_WIDTH}px`);
+    map.draw({ shown: false });
+    assert.equal(view.scrollDOM.style.marginRight, '', 'not drawn in a narrow editor');
+    map.makeRoom(true);
+    map.destroy();
+    assert.equal(view.scrollDOM.style.marginRight, '', 'the minimap switched off');
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test('the wheel over the minimap scrolls the text, and passes on at its end', async () => {
+  const { MinimapView } = await editorModule('minimap');
+  const scroller = {
+    scrollTop: 0, scrollLeft: 0,
+    scrollBy(x, y) { this.scrollLeft = Math.max(0, this.scrollLeft + x); this.scrollTop = Math.max(0, this.scrollTop + y); },
+  };
+  const wheel = (deltaY, ctrlKey = false) => {
+    let taken = false;
+    MinimapView.prototype.wheel.call({ view: { scrollDOM: scroller } }, { deltaX: 0, deltaY, ctrlKey, preventDefault() { taken = true; } });
+    return taken;
+  };
+  assert.equal(wheel(120), true);
+  assert.equal(scroller.scrollTop, 120);
+  assert.equal(wheel(120, true), false, 'Ctrl + wheel is not a scroll');
+  assert.equal(scroller.scrollTop, 120);
+  wheel(-120);
+  assert.equal(wheel(-120), false, 'already at the top');
+});
+
 test('the minimap is in an editor when it is on, never in a compact one', async () => {
   const { editorExtensions } = await editorModule('core');
   const { prefActive, setPref } = await editorModule('prefs');

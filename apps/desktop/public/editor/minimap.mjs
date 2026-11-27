@@ -5,9 +5,9 @@
 // of the find bar (the current one brighter), the changes of a diff (a strip on
 // the left: added, changed, deleted), the errors and warnings, the selections.
 // When the file is taller than the minimap, the minimap scrolls with the
-// editor, in proportion. It sits in the scroller after the text (position:
-// sticky), so the text and its wrapping make room for it. It is not drawn in
-// an editor narrower than MIN_EDITOR_WIDTH.
+// editor, in proportion. It sits beside the scroller, which makes room for it,
+// so that no text ever goes under it; the wheel over it scrolls the text. It is
+// not drawn in an editor narrower than MIN_EDITOR_WIDTH.
 import { EditorView, ViewPlugin } from '@codemirror/view';
 import { syntaxTree, highlightingFor } from '@codemirror/language';
 import { getStyleTags } from '@lezer/highlight';
@@ -100,12 +100,9 @@ function diagnosticMarks(state) {
 
 const minimapTheme = EditorView.theme({
   '.cm-minimap': {
-    position: 'sticky',
-    top: 0,
+    position: 'absolute',
     right: 0,
-    flex: 'none',
     width: `${WIDTH}px`,
-    alignSelf: 'flex-start',
     zIndex: 3,
     cursor: 'default',
     backgroundColor: 'var(--cm-minimap-bg, #22232e)',
@@ -138,13 +135,30 @@ class MinimapView {
     this.probe = document.createElement('span');
     this.probe.className = 'cm-minimap-probe';
     this.dom.append(this.canvas, this.slider, this.probe);
-    view.scrollDOM.insertBefore(this.dom, view.contentDOM.nextSibling);
+    view.dom.appendChild(this.dom);
+    // Room at once, for a scroll to the cursor that comes before the first measure.
+    this.makeRoom(true);
     this.colors = new Map(); // highlight class → its colour
     this.layout = null;
     this.onScroll = () => this.schedule();
     view.scrollDOM.addEventListener('scroll', this.onScroll, { passive: true });
     this.dom.addEventListener('pointerdown', e => this.pointerDown(e));
+    this.dom.addEventListener('wheel', e => this.wheel(e), { passive: false });
     this.schedule();
+  }
+
+  /** The scroller ends where the minimap starts, or fills the editor without one. */
+  makeRoom(shown) {
+    this.view.scrollDOM.style.marginRight = shown ? `${WIDTH}px` : '';
+  }
+
+  /** The wheel over the minimap scrolls the text; at its end, whatever is around the editor. */
+  wheel(event) {
+    if (event.ctrlKey) return;
+    const scroller = this.view.scrollDOM;
+    const { scrollTop, scrollLeft } = scroller;
+    scroller.scrollBy(event.deltaX, event.deltaY);
+    if (scroller.scrollTop !== scrollTop || scroller.scrollLeft !== scrollLeft) event.preventDefault();
   }
 
   update(update) {
@@ -169,6 +183,7 @@ class MinimapView {
     const doc = view.state.doc;
     return {
       shown,
+      top: scroller.offsetTop,
       height,
       dpr: window.devicePixelRatio || 1,
       layout: minimapLayout({
@@ -193,10 +208,12 @@ class MinimapView {
   }
 
   draw(measured) {
+    this.makeRoom(measured.shown);
     if (!measured.shown) { this.dom.style.display = 'none'; this.layout = null; return; }
     this.dom.style.display = '';
-    const { height, dpr, layout } = measured;
+    const { top, height, dpr, layout } = measured;
     this.layout = layout;
+    this.dom.style.top = `${top}px`;
     this.dom.style.height = `${height}px`;
     if (this.canvas.width !== WIDTH * dpr || this.canvas.height !== height * dpr) {
       this.canvas.width = WIDTH * dpr;
@@ -332,6 +349,7 @@ class MinimapView {
 
   destroy() {
     this.view.scrollDOM.removeEventListener('scroll', this.onScroll);
+    this.makeRoom(false);
     this.dom.remove();
   }
 }
@@ -343,4 +361,4 @@ function minimap() {
   return [minimapPlugin, minimapTheme];
 }
 
-export { minimap, minimapLayout, lineAtY, searchMarks, diffMarks, diagnosticMarks, WIDTH as MINIMAP_WIDTH, LINE_HEIGHT as MINIMAP_LINE_HEIGHT, MIN_EDITOR_WIDTH };
+export { minimap, MinimapView, minimapLayout, lineAtY, searchMarks, diffMarks, diagnosticMarks, WIDTH as MINIMAP_WIDTH, LINE_HEIGHT as MINIMAP_LINE_HEIGHT, MIN_EDITOR_WIDTH };

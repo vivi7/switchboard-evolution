@@ -192,14 +192,12 @@ class StickyScrollView {
       if (endBottom < headerBottom) slide = Math.max(-lineHeight, endBottom - headerBottom);
     }
     const gutters = view.scrollDOM.querySelector('.cm-gutters');
-    const minimapEl = view.scrollDOM.querySelector('.cm-minimap');
-    const minimapWidth = minimapEl && minimapEl.style.display !== 'none' ? minimapEl.offsetWidth : 0;
     return {
       lines,
       slide,
       lineHeight,
       top: scrollerRect.top - editorRect.top,
-      width: scroller.clientWidth - minimapWidth,
+      width: scroller.clientWidth,
       gutterWidth: gutters ? gutters.offsetWidth : 0,
       textLeft: view.contentDOM.getBoundingClientRect().left - scrollerRect.left + scroller.scrollLeft
         + parseFloat(getComputedStyle(view.contentDOM).paddingLeft || '0') - (gutters ? gutters.offsetWidth : 0),

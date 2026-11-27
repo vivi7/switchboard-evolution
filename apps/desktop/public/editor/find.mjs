@@ -111,12 +111,15 @@ const matchRuler = ViewPlugin.fromClass(class {
       const y = Math.min(height - 2, Math.floor((view.lineBlockAt(m.from).top + padding) / total * height));
       rows.set(y, rows.get(y) || (m.from === sel.from && m.to === sel.to));
     }
-    return { top: scroller.offsetTop, height, rows };
+    // On the scrollbar, which has the minimap at its right when there is one.
+    const right = view.dom.clientWidth - scroller.offsetLeft - scroller.offsetWidth;
+    return { top: scroller.offsetTop, right, height, rows };
   }
   draw(measured) {
     if (!measured) { this.dom.style.display = 'none'; this.dom.replaceChildren(); return; }
     this.dom.style.display = '';
     this.dom.style.top = `${measured.top}px`;
+    this.dom.style.right = `${measured.right}px`;
     this.dom.style.height = `${measured.height}px`;
     const marks = [];
     for (const [y, active] of measured.rows) {
