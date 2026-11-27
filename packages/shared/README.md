@@ -22,6 +22,7 @@ Modules both apps use, written once here:
 - `command-catalog-model.js`: the command catalog of a session (its tabs, the search, what a pick types into the session, when Run is allowed and what it asks first).
 - `env-files-model.js`: the `local.env.sh` of a project and of its folders (the name, what a new one holds, and the loading rules the Env tab shows).
 - `prompt-improver-model.js`: the prompt improver (its settings and their checks, the improver prompt and its placeholders, the context block the app adds, reading the rewritten prompt from the reply).
+- `markdown-links.js`: what a link of a Markdown file points at (a file, a section, the web), and the anchors of its headings.
 
 Each one runs as a classic browser script, a CommonJS module and an ES import, so for now the apps keep a copy:
 the desktop in `public/` (and `remote-protocol.js` at its root), the mobile app in `src/shared/vendor/` with the

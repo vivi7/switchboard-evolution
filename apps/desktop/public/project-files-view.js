@@ -126,6 +126,10 @@ function ensureProjectEditor() {
     onSave: (filePath, content) => saveProjectEditorFile(projectEditor, filePath, content),
     // Go to Definition into another file of the same folder: opened as from the explorer.
     openFile: (filePath, at) => openProjectEditorLocation(projectEditor, filePath, at),
+    // A link to another folder's file: this editor saves for its own folder only.
+    openLinked: async (filePath, at) => {
+      if (!(await openProjectEditorLocation(projectEditor, filePath, at))) openFileInWindow(filePath);
+    },
   });
   projectEditor = { host, panel, projectId: null, root: null, rel: null };
   return projectEditor;
@@ -139,6 +143,7 @@ function ensureSideEditor() {
     copyPath: true, copyContent: true, language: 'auto', storageKey: 'markdownPreviewMode',
     onSave: (filePath, content) => saveProjectEditorFile(projectSideEditor, filePath, content),
     onClose: () => closeSideEditor(),
+    openLinked: (filePath, at) => openSideEditorLink(projectSideEditor, filePath, at),
   });
   projectSideEditor = { host, panel, projectId: null, root: null, rel: null };
   return projectSideEditor;
@@ -265,6 +270,19 @@ async function openProjectEditorLocation(ed, filePath, { line, column } = {}) {
   await openFileInProjectEditor(project, filePath.slice(root.length + 1).split(sep).join('/'), { root });
   if (ed.panel.filePath === filePath && line) ed.panel.goToLocation(line, column);
   return true;
+}
+
+/** A link in the side editor: a file of its folder opens there, any other in a window of its own. */
+async function openSideEditorLink(side, filePath, { line, column } = {}) {
+  const project = selectedProject();
+  const root = side.root;
+  const sep = root && root.includes('\\') && !root.includes('/') ? '\\' : '/';
+  if (!project || project.id !== side.projectId || !root || !filePath.startsWith(root + sep)) {
+    openFileInWindow(filePath);
+    return;
+  }
+  await openFileToSide(project, root, filePath.slice(root.length + 1).split(sep).join('/'));
+  if (side.panel.filePath === filePath && line) side.panel.goToLocation(line, column);
 }
 
 /** "Open to the Side": the file in a second editor beside the first. */

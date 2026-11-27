@@ -3,6 +3,8 @@
 // a tool read or changed, and paths in a message's `code` or links. The
 // computer finds where a path is (locate-file) when one is tapped.
 
+import { parseMarkdownLink } from '@/shared/vendor/markdown-links';
+
 import { inputObject } from './tool-details';
 import type { ChatItem } from './transcript';
 
@@ -43,15 +45,10 @@ export function looksLikePath(text: string): boolean {
   return !!ext && EXTENSIONS.has(ext.toLowerCase()) && /^[\w@+-]/.test(name);
 }
 
-/** The path a markdown link points at on the computer, or null for a web or mail link. */
+/** The path a markdown link points at on the computer, or null for a web or mail link or a section. */
 export function localLinkPath(url: string): string | null {
-  if (!url || url.startsWith('#')) return null;
-  let target = url;
-  if (/^file:\/\//i.test(target)) target = target.slice('file://'.length);
-  else if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return null;
-  try { target = decodeURI(target); } catch {}
-  target = stripLocation(target);
-  return target || null;
+  const link = parseMarkdownLink(url);
+  return link.kind === 'file' ? stripLocation(link.path) || null : null;
 }
 
 /** The file a tool read or changed, from its input. */

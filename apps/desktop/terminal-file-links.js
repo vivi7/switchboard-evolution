@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
+const { isViewableFile } = require('./project-files');
 
 const EDITOR_SCHEMES = new Set(['vscode:', 'vscode-insiders:', 'cursor:', 'windsurf:']);
 
@@ -93,4 +94,21 @@ async function resolveTerminalFiles(references, context = {}) {
   }));
 }
 
-module.exports = { splitFileLocation, parseTerminalFileReference, resolveTerminalFiles };
+/**
+ * The file or folder a link of the document `fromFile` points at, a relative
+ * one from that file's folder; null when there is none. `viewable`: the app
+ * can show it.
+ */
+async function resolveDocumentLink(reference, fromFile) {
+  if (typeof fromFile !== 'string' || !path.isAbsolute(fromFile)) return null;
+  for (const candidate of parseTerminalFileReference(reference, { cwd: path.dirname(fromFile) })) {
+    try {
+      const stat = await fs.promises.stat(candidate.filePath);
+      if (stat.isDirectory()) return { ...candidate, directory: true };
+      if (stat.isFile()) return { ...candidate, viewable: isViewableFile(candidate.filePath, stat) };
+    } catch {}
+  }
+  return null;
+}
+
+module.exports = { splitFileLocation, parseTerminalFileReference, resolveTerminalFiles, resolveDocumentLink };

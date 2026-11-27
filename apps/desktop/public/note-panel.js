@@ -34,6 +34,8 @@ function noteEditorOptions(extra = {}) {
     storageKey: 'notePreviewMode',
     autosaveMs: NOTE_AUTOSAVE_MS,
     onSave: saveProjectNote,
+    // This editor stays the note's: a linked file opens in a window of its own.
+    openLinked: (filePath) => openFileInWindow(filePath),
     ...extra,
   };
 }

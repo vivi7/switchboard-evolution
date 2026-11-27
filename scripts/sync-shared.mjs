@@ -40,6 +40,7 @@ const modules = {
   'env-files-model.js': 'apps/desktop/public/env-files-model.js',
   'prompt-improver-model.js': 'apps/desktop/public/prompt-improver-model.js',
   'settings-model.js': 'apps/desktop/public/settings-model.js',
+  'markdown-links.js': 'apps/desktop/public/markdown-links.js',
 };
 
 const header = (file) =>

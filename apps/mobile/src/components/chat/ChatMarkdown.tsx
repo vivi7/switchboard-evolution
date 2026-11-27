@@ -4,8 +4,10 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Markdown, { MarkdownIt, renderRules, type ASTNode, type RenderRules } from 'react-native-markdown-display';
 
+import { headingAnchors } from '@/files/heading-anchors';
 import { taskLists } from '@/files/task-lists';
 import { localLinkPath, looksLikePath } from '@/sessions/file-refs';
+import { parseMarkdownLink } from '@/shared/vendor/markdown-links';
 import { colors, spacing } from '@/theme';
 import { useOpenFile } from './OpenFile';
 
@@ -49,7 +51,7 @@ function columnsOf(table: ASTNode): number {
 
 const trimEnd = (text: string) => (text.endsWith('\n') ? text.slice(0, -1) : text);
 
-type OpenFile = ((path: string) => void) | null;
+type OpenFile = ((path: string, section?: string) => void) | null;
 
 /** `code` that names a file, as a link that opens it (with `openFile`); other `code` as usual. */
 export function pathCodeRule(openFile: OpenFile): NonNullable<RenderRules['code_inline']> {
@@ -63,8 +65,8 @@ export function pathCodeRule(openFile: OpenFile): NonNullable<RenderRules['code_
   };
 }
 
-/** The parser for the app's markdown: the library's own, with task lists. */
-export const markdownParser = MarkdownIt({ typographer: true }).use(taskLists);
+/** The parser for the app's markdown: the library's own, with task lists and headings' anchors. */
+export const markdownParser = MarkdownIt({ typographer: true }).use(taskLists).use(headingAnchors);
 
 /** A task list item ("- [ ] …", "- [x] …") with a checkbox for its bullet; other items as usual. */
 export const taskItemRule: NonNullable<RenderRules['list_item']> = (node, children, parent, mdStyles, inheritedStyles) => {
@@ -81,12 +83,21 @@ export const taskItemRule: NonNullable<RenderRules['list_item']> = (node, childr
   );
 };
 
-/** Markdown's onLinkPress: a link to a file on the computer opens it here; a web link goes to the browser. */
-export function fileLinkPress(openFile: OpenFile) {
+/**
+ * Markdown's onLinkPress: a link to a file on the computer opens it here, at
+ * the section it names; a section of this text is scrolled to (`showSection`);
+ * a web link goes to the browser.
+ */
+export function fileLinkPress(openFile: OpenFile, showSection?: (section: string) => void) {
   return (url: string) => {
+    const link = parseMarkdownLink(url);
+    if (link.kind === 'anchor') {
+      showSection?.(link.anchor);
+      return false;
+    }
     const path = openFile ? localLinkPath(url) : null;
     if (!path) return true;
-    openFile!(path);
+    openFile!(path, link.kind === 'file' && link.anchor ? link.anchor : undefined);
     return false;
   };
 }

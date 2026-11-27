@@ -10,7 +10,12 @@ declare module 'markdown-it' {
   }
 
   interface MarkdownIt {
-    core: { ruler: { push(name: string, rule: (state: { tokens: Token[] }) => boolean): void } };
+    core: {
+      ruler: {
+        push(name: string, rule: (state: { tokens: Token[] }) => boolean): void;
+        after(after: string, name: string, rule: (state: { tokens: Token[] }) => boolean): void;
+      };
+    };
     use(plugin: (md: MarkdownIt) => void): MarkdownIt;
     parse(source: string, env: object): Token[];
     render(source: string): string;

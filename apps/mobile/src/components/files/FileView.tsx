@@ -33,9 +33,10 @@ const CLEAN: EditorState = { dirty: false, canUndo: false, canRedo: false, curso
  * with Replace while editing (FindBar).
  * Give it a `key` per file, so another file starts with no edit in progress.
  * With `line` (a search result) a text file opens scrolled to that line, which
- * is marked; a Markdown file then opens raw, where lines are lines.
+ * is marked; a Markdown file then opens raw, where lines are lines. With
+ * `section` (a link) the formatted Markdown opens at that heading.
  */
-export function FileView({ root, path, line, inline = false }: { root: string; path: string; line?: number; inline?: boolean }) {
+export function FileView({ root, path, line, section, inline = false }: { root: string; path: string; line?: number; section?: string; inline?: boolean }) {
   const online = useConnection((s) => s.status.state === 'online');
   const file = useQuery({
     queryKey: ['file', root, path],
@@ -132,7 +133,7 @@ export function FileView({ root, path, line, inline = false }: { root: string; p
   else if (data.previewType === 'image' && data.base64) {
     body = <ScrollView maximumZoomScale={4} minimumZoomScale={1} contentContainerStyle={styles.imageBox}><Image source={{ uri: `data:${data.mimeType};base64,${data.base64}` }} style={styles.image} resizeMode="contain" /></ScrollView>;
   } else if (isText && isMarkdown && !raw) {
-    body = <MarkdownPreview root={root} path={path} content={data.content || ''} />;
+    body = <MarkdownPreview root={root} path={path} content={data.content || ''} section={section} />;
   } else if (isText) {
     body = (
       <View style={styles.editorBox}>

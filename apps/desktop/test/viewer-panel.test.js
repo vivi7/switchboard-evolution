@@ -52,6 +52,7 @@ function setup(options = {}) {
     },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/json-reader.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/markdown-links.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/viewer-panel.js'), 'utf8'), context);
   const writes = [];
   const panel = new context.window.ViewerPanel(element(), {
@@ -480,4 +481,69 @@ test('the editor\'s keys work from the toolbar: F3, Ctrl+G, Cmd+Shift+O go to th
     panel._onKeyDown(event);
   }
   assert.deepEqual(ran, ['F3', 'g', 'O']);
+});
+
+// A Markdown file shown, and a click on one of its preview's links.
+function linkSetup(options, targets = {}) {
+  const made = setup(options);
+  const calls = [];
+  Object.assign(made.api, {
+    resolveDocumentLink: async (reference, from) => { calls.push(['resolve', reference, from]); return targets[reference] || null; },
+    openExternal: async (url) => calls.push(['external', url]),
+    openPath: async (folder) => calls.push(['folder', folder]),
+    revealFile: (file) => calls.push(['reveal', file]),
+    readFileForPanel: async (filePath) => ({ ok: true, filePath, previewType: 'text', content: '# Linked' }),
+  });
+  made.panel.open('Manual', '/docs/manual.md', '# Manual');
+  const click = async (href) => {
+    let prevented = false;
+    const link = { getAttribute: () => href };
+    made.panel._onPreviewClick({ target: { closest: () => link }, preventDefault: () => { prevented = true; } });
+    await new Promise(resolve => setImmediate(resolve));
+    return prevented;
+  };
+  return { ...made, calls, click };
+}
+
+test('a link to a file opens it in the viewer, from the shown file\'s folder, without moving the window', async () => {
+  const { panel, calls, click } = linkSetup({}, { 'script.md': { filePath: '/docs/script.md', viewable: true } });
+  assert.equal(await click('script.md'), true);
+  assert.deepEqual(calls, [['resolve', 'script.md', '/docs/manual.md']]);
+  assert.equal(panel.filePath, '/docs/script.md');
+  assert.equal(panel.getContent(), '# Linked');
+});
+
+test('a linked file goes the host\'s way when it has one, with its line and section', async () => {
+  const opened = [];
+  const targets = { 'a.md': { filePath: '/docs/a.md', viewable: true }, 'a.js:3': { filePath: '/docs/a.js', line: 3, column: 1, viewable: true } };
+  const { panel, click } = linkSetup({ openLinked: async (filePath, at) => opened.push([filePath, JSON.parse(JSON.stringify(at))]) }, targets);
+  await click('a.md#set-up');
+  await click('a.js:3');
+  assert.deepEqual(opened, [['/docs/a.md', { anchor: 'set-up' }], ['/docs/a.js', { line: 3, column: 1, anchor: '' }]]);
+  assert.equal(panel.filePath, '/docs/manual.md');
+});
+
+test('web addresses, folders, files with no preview and missing files', async () => {
+  const targets = { 'sub/': { filePath: '/docs/sub', directory: true }, 'tool.bin': { filePath: '/docs/tool.bin', viewable: false } };
+  const { panel, calls, alerts, click } = linkSetup({}, targets);
+  await click('https://example.com/');
+  await click('sub/');
+  await click('tool.bin');
+  await click('nope.md');
+  assert.deepEqual(calls.filter(([kind]) => kind !== 'resolve'), [['external', 'https://example.com/'], ['folder', '/docs/sub'], ['reveal', '/docs/tool.bin']]);
+  assert.deepEqual(alerts, ['nope.md was not found']);
+  assert.equal(panel.filePath, '/docs/manual.md');
+});
+
+test('a section link scrolls the preview to its heading', () => {
+  const { panel, calls } = linkSetup({});
+  const heading = (text, top) => ({ textContent: text, getBoundingClientRect: () => ({ top }) });
+  const headings = [heading('Manual', 100), heading('Before you start', 460)];
+  panel.previewMode = true;
+  panel.previewEl.scrollTop = 20;
+  panel.previewEl.getBoundingClientRect = () => ({ top: 60 });
+  panel.previewEl.querySelectorAll = (selector) => (selector.startsWith('h1') ? headings : []);
+  panel._onPreviewClick({ target: { closest: () => ({ getAttribute: () => '#before-you-start' }) }, preventDefault() {} });
+  assert.equal(panel.previewEl.scrollTop, 420);
+  assert.deepEqual(calls, []);
 });

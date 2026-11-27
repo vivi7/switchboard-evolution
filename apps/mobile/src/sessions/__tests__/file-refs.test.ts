@@ -38,6 +38,9 @@ describe('paths in a message', () => {
     expect(localLinkPath('https://docs.expo.dev')).toBeNull();
     expect(localLinkPath('mailto:a@b.c')).toBeNull();
     expect(localLinkPath('#section')).toBeNull();
+    expect(localLinkPath('guide.md#the-cluster')).toBe('guide.md');
+    expect(localLinkPath('docs/my%20file.md#setup')).toBe('docs/my file.md');
+    expect(localLinkPath('README.md:3')).toBe('README.md');
     expect(localLinkPath('')).toBeNull();
   });
 

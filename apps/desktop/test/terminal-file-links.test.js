@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { pathToFileURL } = require('node:url');
-const { parseTerminalFileReference, resolveTerminalFiles } = require('../terminal-file-links');
+const { parseTerminalFileReference, resolveTerminalFiles, resolveDocumentLink } = require('../terminal-file-links');
 
 test('absolute paths and home paths preserve location suffixes without a session cwd', () => {
   for (const platform of ['darwin', 'linux']) {
@@ -101,4 +101,20 @@ test('bare plan filenames cannot open an unrelated plan in the process directory
     process.chdir(root);
     assert.deepEqual(await resolveTerminalFiles(['plan.md', './plan.md', 'file:plan.md']), [null, null, null]);
   } finally { process.chdir(initialCwd); }
+});
+
+test('a link of a document resolves from the document\'s folder, files and folders alike', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-doc-links-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'docs'));
+  const from = path.join(root, 'docs', 'manual.md');
+  for (const file of ['docs/manual.md', 'docs/my script.md', 'README.md']) fs.writeFileSync(path.join(root, file), '# x\n');
+  fs.writeFileSync(path.join(root, 'tool.bin'), Buffer.from([0, 1, 2]));
+  assert.deepEqual(await resolveDocumentLink('my script.md', from), { filePath: path.join(root, 'docs', 'my script.md'), viewable: true });
+  assert.deepEqual(await resolveDocumentLink('../README.md#L3', from), { filePath: path.join(root, 'README.md'), line: 3, column: 1, viewable: true });
+  assert.deepEqual(await resolveDocumentLink('..', from), { filePath: root, directory: true });
+  assert.deepEqual(await resolveDocumentLink('../tool.bin', from), { filePath: path.join(root, 'tool.bin'), viewable: false });
+  assert.equal(await resolveDocumentLink('nope.md', from), null);
+  assert.equal(await resolveDocumentLink('https://example.com/a.md', from), null);
+  assert.equal(await resolveDocumentLink('README.md', 'relative.md'), null);
 });

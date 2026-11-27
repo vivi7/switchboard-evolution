@@ -17,6 +17,13 @@ const planPanel = new ViewerPanel(planViewer, {
   copyPath: true, copyContent: true,
   language: 'markdown', storageKey: 'markdownPreviewMode',
   onSave: (filePath, content) => window.api.savePlan(filePath, content),
+  // This viewer saves plans only: a linked file opens as a click in the Files tab would.
+  openLinked: async (filePath, { line, column, anchor }) => {
+    await openFileHere(filePath);
+    if (memoryPanel.filePath !== filePath) return;
+    if (line) memoryPanel.goToLocation(line, column);
+    else memoryPanel.showAnchor(anchor);
+  },
 });
 
 // currentPlanContent, currentPlanFilePath, currentPlanFilename → plans-memory-view.js

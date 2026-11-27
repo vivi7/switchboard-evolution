@@ -93,6 +93,8 @@ function initFilePanel() {
     storageKey: 'markdownPreviewMode',
     onSave: (filePath, content) => window.api.saveFileForPanel(filePath, content),
     onClose: handleClose,
+    // A linked file becomes the session's file tab, as one clicked in its terminal.
+    openLinked: (filePath, at) => openFileInPanel(currentPanelSessionId, filePath, at),
   });
 
   // ── Diff-specific UI ──

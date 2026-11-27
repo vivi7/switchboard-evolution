@@ -13,6 +13,8 @@
   const panel = new ViewerPanel(host, {
     copyPath: true, copyContent: true, language: 'auto', storageKey: 'markdownPreviewMode',
     onSave: (path, content) => window.api.saveFileForPanel(path, content),
+    // This window stays its file's: a linked file opens in a window of its own.
+    openLinked: (filePath) => window.api.openFileWindow(filePath),
   });
   // The pin closes the toolbar's row of buttons.
   const pin = document.getElementById('tool-window-pin');
