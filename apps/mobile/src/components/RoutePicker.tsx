@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } fro
 import { routesOffered, type InternetRoutes, type RouteName } from '@/remote/client';
 import { colors, spacing } from '@/theme';
 
-const ROUTES: Record<RouteName, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
+export const ROUTES: Record<RouteName, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
   lan: { label: 'Local network', icon: 'wifi' },
   cloudflare: { label: 'Cloudflare', icon: 'cloud-outline' },
   ngrok: { label: 'ngrok', icon: 'globe-outline' },

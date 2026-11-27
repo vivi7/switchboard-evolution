@@ -1,14 +1,17 @@
 import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
 import { router } from 'expo-router';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { DonateBox } from '@/components/DonateBox';
 import { RoutePicker } from '@/components/RoutePicker';
+import { SettingRow, SettingsScroll } from '@/components/settings/found';
+import { routesOffered } from '@/remote/client';
+import { COMPUTER, addressesText, desktopVersionText, mobileVersionText, pairedText } from '@/settings/rows';
 import { useConnection } from '@/store/connection';
 import { colors, spacing } from '@/theme';
 
-const REPOSITORY = 'https://github.com/vivi7/switchboard-evolution';
+const REPOSITORY = `https://${COMPUTER.sourceAddress}`;
 /** This app's version as it was built (app.json's, embedded in the build). */
 const MOBILE_VERSION = Constants.expoConfig?.version ?? null;
 
@@ -48,7 +51,7 @@ export function ComputerTab() {
   );
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <SettingsScroll style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.row}>
         <View style={styles.computer}>
           <View style={[styles.dot, { backgroundColor: status.state === 'online' ? colors.running : colors.textFaint }]} />
@@ -56,55 +59,66 @@ export function ComputerTab() {
         </View>
         <Text style={styles.status} selectable>{describe(status)}</Text>
       </View>
-      <RoutePicker internet={desktop.internet} value={desktop.route ?? 'lan'} onChange={setRoute} style={styles.card} />
-      <View style={styles.versions}>
-        <View style={styles.half}>
-          <Text style={styles.label}>Paired Switchboard Evolution</Text>
-          {hello
-            ? <Text style={styles.value} selectable>{`version ${hello.appVersion}`}</Text>
-            : <Text style={[styles.value, styles.faint]}>not connected</Text>}
-        </View>
-        <View style={styles.divider} />
-        <View style={styles.half}>
-          <Text style={styles.label}>This Switchboard Mobile</Text>
-          <Text style={styles.value} selectable>{MOBILE_VERSION ? `version ${MOBILE_VERSION}` : 'unknown'}</Text>
-        </View>
-      </View>
-      <Pressable
-        onPress={() => { Linking.openURL(REPOSITORY).catch(() => {}); }}
-        style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-        accessibilityRole="link"
-        accessibilityLabel="Source code on GitHub"
-      >
-        <Text style={styles.label}>Source code</Text>
-        <Text style={[styles.value, styles.link]}>github.com/vivi7/switchboard-evolution</Text>
-      </Pressable>
-      {hello ? <Row label="This phone on the computer" value={hello.device.name} /> : null}
-      <Row label="Addresses" value={`${desktop.addresses.join(', ')} (port ${desktop.port})`} />
-      <Row label="Paired" value={new Date(desktop.pairedAt).toLocaleString()} />
-      {status.state === 'offline' ? (
-        <Pressable onPress={reconnect} style={styles.button} accessibilityRole="button">
-          <Text style={styles.buttonText}>Reconnect now</Text>
-        </Pressable>
+      {/* A picker with one way only shows nothing, and gets no row. */}
+      {routesOffered(desktop.internet, desktop.route ?? 'lan').length > 1 ? (
+        <SettingRow id="route">
+          <RoutePicker internet={desktop.internet} value={desktop.route ?? 'lan'} onChange={setRoute} style={styles.card} />
+        </SettingRow>
       ) : null}
-      <Pressable onPress={() => router.push('/pair')} style={styles.button} accessibilityRole="button">
-        <Text style={styles.buttonText}>Pair again</Text>
-      </Pressable>
-      <Pressable onPress={confirmForget} style={styles.button} accessibilityRole="button">
-        <Text style={[styles.buttonText, { color: colors.danger }]}>Forget this computer</Text>
-      </Pressable>
+      <View style={styles.versions}>
+        <SettingRow id="desktop-version" style={styles.half}>
+          <Text style={styles.label}>{COMPUTER.desktopVersion}</Text>
+          <Text style={[styles.value, !hello && styles.faint]} selectable={!!hello}>{desktopVersionText(hello?.appVersion)}</Text>
+        </SettingRow>
+        <View style={styles.divider} />
+        <SettingRow id="mobile-version" style={styles.half}>
+          <Text style={styles.label}>{COMPUTER.mobileVersion}</Text>
+          <Text style={styles.value} selectable>{mobileVersionText(MOBILE_VERSION)}</Text>
+        </SettingRow>
+      </View>
+      <SettingRow id="source">
+        <Pressable
+          onPress={() => { Linking.openURL(REPOSITORY).catch(() => {}); }}
+          style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+          accessibilityRole="link"
+          accessibilityLabel="Source code on GitHub"
+        >
+          <Text style={styles.label}>{COMPUTER.source}</Text>
+          <Text style={[styles.value, styles.link]}>{COMPUTER.sourceAddress}</Text>
+        </Pressable>
+      </SettingRow>
+      {hello ? <Row id="device" label={COMPUTER.device} value={hello.device.name} /> : null}
+      <Row id="addresses" label={COMPUTER.addresses} value={addressesText(desktop)} />
+      <Row id="paired" label={COMPUTER.paired} value={pairedText(desktop)} />
+      {status.state === 'offline' ? (
+        <SettingRow id="reconnect">
+          <Pressable onPress={reconnect} style={styles.button} accessibilityRole="button">
+            <Text style={styles.buttonText}>{COMPUTER.reconnect}</Text>
+          </Pressable>
+        </SettingRow>
+      ) : null}
+      <SettingRow id="pair-again">
+        <Pressable onPress={() => router.push('/pair')} style={styles.button} accessibilityRole="button">
+          <Text style={styles.buttonText}>{COMPUTER.pairAgain}</Text>
+        </Pressable>
+      </SettingRow>
+      <SettingRow id="forget">
+        <Pressable onPress={confirmForget} style={styles.button} accessibilityRole="button">
+          <Text style={[styles.buttonText, { color: colors.danger }]}>{COMPUTER.forget}</Text>
+        </Pressable>
+      </SettingRow>
       {/* The donation box of the Projects tab, always here and without its X. */}
       <DonateBox style={styles.donate} />
-    </ScrollView>
+    </SettingsScroll>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ id, label, value }: { id: string; label: string; value: string }) {
   return (
-    <View style={styles.row}>
+    <SettingRow id={id} style={styles.row}>
       <Text style={styles.label}>{label}</Text>
       <Text style={styles.value} selectable>{value}</Text>
-    </View>
+    </SettingRow>
   );
 }
 

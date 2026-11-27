@@ -66,3 +66,15 @@ export function editorPrefsSync(
   storedGlobal: { editorPrefs?: Partial<EditorPrefs> } | null | undefined,
   current: Partial<EditorPrefs>,
 ): { migrate: EditorPrefs | null; apply: Partial<EditorPrefs> };
+
+/** A setting the search looks through. */
+export interface SearchableSetting { title: string; description: string }
+export interface SearchFound<T> { titles: T[]; descriptions: T[] }
+
+export const SEARCH_GROUPS: readonly { key: 'titles' | 'descriptions'; label: string }[];
+/** The title matches, then the settings that need their description to match; each in the order given. */
+export function searchSettings<T extends SearchableSetting>(entries: readonly T[], query: string): SearchFound<T>;
+/** `text` in pieces, `match` true on the ones that are a word of `query`. */
+export function searchParts(text: string, query: string): { text: string; match: boolean }[];
+export function searchWhere(tab: string, section: string): string;
+export function searchStatus(query: string, count: number): string;

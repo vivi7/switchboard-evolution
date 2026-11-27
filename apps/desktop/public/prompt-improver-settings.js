@@ -115,7 +115,17 @@ async function renderPromptImproverSettings(section) {
       if (!section.isConnected) return;
       info = { ...info, settings };
       // Not while the user is typing in one of its fields.
-      if (!section.contains(document.activeElement)) draw();
+      const active = document.activeElement;
+      if (!section.contains(active)) { draw(); return; }
+      // A whole row with the focus (a search result led there, settings-search.js)
+      // holds nothing typed: it is drawn again and keeps the focus.
+      const rows = () => [...section.querySelectorAll('.settings-field')];
+      const at = rows().indexOf(active);
+      if (at < 0) return;
+      draw();
+      const row = rows()[at];
+      row.tabIndex = -1;
+      row.focus({ preventScroll: true });
     });
   }
 }

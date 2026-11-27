@@ -3839,6 +3839,8 @@ button.cm-status-item:disabled { cursor: default; }
 .settings-form {
   width: 100%;
   max-width: 680px;
+  /* As tall as its content, not as the page: .settings-head stays stuck only within it. */
+  align-self: flex-start;
 }
 
 /* --- Section titles --- */
@@ -4080,17 +4082,27 @@ button.cm-status-item:disabled { cursor: default; }
   margin-top: 8px;
 }
 
-/* Global Settings tabs (settings-panel.js): the look of the project page's tabs (.ws-tab).
-   The bar stays at the top while a long tab scrolls: flush with the page's
-   top, above #settings-viewer-body's 32px padding. */
-.settings-tabs {
+/* The search box and, in Global Settings, the tabs (settings-panel.js). They
+   stay at the top while the page scrolls: flush with the page's top, above
+   #settings-viewer-body's 32px padding. */
+.settings-head {
   position: sticky;
   top: -32px;
   z-index: 2;
+  margin: -10px 0 24px;
+  padding-top: 10px;
+  background: #111118;
+}
+/* What takes the keyboard focus scrolls into view below the head, not under it. */
+.settings-search-result,
+.settings-pane :is(input, select, textarea, button),
+.settings-form > .settings-section :is(input, select, textarea, button) { scroll-margin-top: 90px; }
+
+/* Global Settings tabs: the look of the project page's tabs (.ws-tab). */
+.settings-tabs {
   display: flex;
   gap: 22px;
-  margin-bottom: 24px;
-  background: #111118;
+  margin-top: 8px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
   overflow-x: auto;
   scrollbar-width: none;
@@ -4115,6 +4127,34 @@ button.cm-status-item:disabled { cursor: default; }
 .settings-tab:hover { color: #b0b0c4; }
 .settings-tab.active { color: #d0d0e8; border-bottom-color: var(--accent); }
 .settings-tab:focus-visible { outline: 1px solid rgb(from var(--accent) r g b / 0.6); outline-offset: 2px; border-radius: 3px; }
+
+/* The settings search (settings-search.js): its results take the place of the tabs and the settings. */
+.settings-form.searching .settings-tabs,
+.settings-form.searching > .settings-pane,
+.settings-form.searching > .settings-section { display: none; }
+.settings-search-status { margin: -12px 0 16px; padding-left: 4px; font-size: 12px; color: #8a8aa0; }
+.settings-search-status:empty { margin: 0; }
+.settings-search-group { margin-bottom: 20px; border-radius: 10px; overflow: hidden; }
+.settings-search-result {
+  display: block;
+  width: 100%;
+  padding: 12px 18px;
+  border: none;
+  border-bottom: 1px solid rgba(255,255,255,0.035);
+  background: rgba(255,255,255,0.02);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-search-result:last-child { border-bottom: none; }
+.settings-search-result:hover { background: rgba(255,255,255,0.05); }
+.settings-search-result:focus-visible { outline: 1px solid rgb(from var(--accent) r g b / 0.6); outline-offset: -1px; }
+.settings-search-result > span { display: block; overflow-wrap: anywhere; }
+.settings-search-where { margin-bottom: 2px; font-size: 11px; color: #8a8aa0; }
+.settings-search-result mark { background: rgb(from var(--accent) r g b / 0.3); color: #e0e0f0; border-radius: 2px; }
+/* The setting a search result led to, marked for a moment. */
+.settings-field.settings-field-found { background: rgb(from var(--accent) r g b / 0.1); box-shadow: inset 0 0 0 1px var(--accent); }
+.settings-field:focus-visible { outline: 1px solid rgb(from var(--accent) r g b / 0.6); outline-offset: -1px; }
 
 /* "Saved" beside a field's label for a moment, or why its value was refused. */
 .settings-field-note {

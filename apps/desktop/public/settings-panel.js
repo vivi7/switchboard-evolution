@@ -1,6 +1,7 @@
 // Settings panel component
 // The Global Settings page, in tabs (Application, Agents, Editor, Node
-// Knowledge, Prompt Improver), and a folder's own settings, without tabs.
+// Knowledge, Prompt Improver), and a folder's own settings, without tabs,
+// each with a search box at the top (settings-search.js).
 // Each setting is saved as it changes, one key at a time (patch-setting): a
 // switch or a choice when it is clicked, a text or number field when you
 // leave it or press Enter. "Saved" shows beside the field for a moment; a
@@ -634,7 +635,13 @@
 
     settingsViewerBody.innerHTML = `
     <div class="settings-form">
-      ${isProject ? agentsSections : `${tabBarHtml()}
+      <div class="settings-head">
+        <input type="search" class="settings-input settings-search-input" id="sv-search" placeholder="Search settings" aria-label="Search settings" autocomplete="off" spellcheck="false">
+        ${isProject ? '' : tabBarHtml()}
+      </div>
+      <div class="settings-search-status" role="status"></div>
+      <div class="settings-search-results" hidden></div>
+      ${isProject ? agentsSections : `
       <div class="settings-pane" data-tab="application" id="sv-pane-application" role="tabpanel" aria-labelledby="sv-tab-application">${applicationSections}</div>
       <div class="settings-pane" data-tab="agents" id="sv-pane-agents" role="tabpanel" aria-labelledby="sv-tab-agents" hidden>${agentsSections}</div>
       <div class="settings-pane" data-tab="editor" id="sv-pane-editor" role="tabpanel" aria-labelledby="sv-tab-editor" hidden>
@@ -655,6 +662,7 @@
   `;
     const form = settingsViewerBody.querySelector('.settings-form');
     if (!isProject) bindTabs();
+    bindSettingsSearch(form);
     syncHarnessLock();
 
     // --- Saving: each setting as it changes ---

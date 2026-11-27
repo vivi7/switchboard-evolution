@@ -1,9 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Chips, ErrorText, Field, Hint, Label, MONO, SelectRow, SwitchRow } from '@/components/form';
 import { Section } from '@/components/project/Section';
+import { SettingRow, SettingsScroll } from '@/components/settings/found';
 import {
   KEPT_ON,
   TEMPLATES_AFTER,
@@ -25,6 +26,7 @@ import {
   type SettingsField,
 } from '@/settings/model';
 import { currentGlobalSettings, saveGlobalSettings, useGlobalSettings } from '@/settings/queries';
+import { TEMPLATES, harnessHelp } from '@/settings/rows';
 import type { GlobalSettingsInfo } from '@/settings/types';
 import { ACCENT_PRESETS } from '@/shared/vendor/settings-model';
 import { useConnection } from '@/store/connection';
@@ -41,7 +43,6 @@ const PLACEHOLDERS: Record<string, string> = {
   preLaunchCmd: 'e.g. aws-vault exec profile --',
   projectsRoot: '~/Switchboard',
 };
-const TEMPLATES_HELP = 'One folder per template, each with a template.json and the files a new project starts with. Add a folder to add a template.';
 
 type Note = SaveNote;
 type Change = (field: SettingsField, raw: FieldInput, options?: { id?: string; shown?: boolean }) => Promise<CommitResult>;
@@ -76,18 +77,21 @@ export function CatalogTab({ tab }: { tab: CatalogTabKey }) {
     .filter((s) => s.fields.length > 0);
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets>
+    <SettingsScroll style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets>
       {sections.map(({ section, fields }) => (
         <Section key={section} title={section}>
           {fields.map((field) => (
             <Fragment key={field.key}>
-              <Control field={field} info={info} {...saves} />
+              {/* The CLIs have a row each (HarnessControls). */}
+              {field.kind === 'harnesses'
+                ? <Control field={field} info={info} {...saves} />
+                : <SettingRow id={field.key}><Control field={field} info={info} {...saves} /></SettingRow>}
               {field.key === TEMPLATES_AFTER ? <Templates dir={info.options.templatesDir} /> : null}
             </Fragment>
           ))}
         </Section>
       ))}
-    </ScrollView>
+    </SettingsScroll>
   );
 }
 
@@ -246,16 +250,16 @@ function HarnessControls(props: ControlProps) {
         const id = `harness:${h.id}`;
         const locked = last === h.id;
         return (
-          <View key={h.id}>
+          <SettingRow key={h.id} id={id}>
             <SwitchRow
               label={h.label}
-              help={locked ? KEPT_ON : `Scan for ${h.id} sessions, show them, and offer it when starting one`}
+              help={locked ? KEPT_ON : harnessHelp(h.id)}
               value={!off.includes(h.id)}
               disabled={locked}
               onChange={(on) => change(field, harnessesOff(harnesses, off, h.id, on), { id, shown: true })}
             />
             <FieldNote note={notes[id]} />
-          </View>
+          </SettingRow>
         );
       })}
     </>
@@ -324,11 +328,11 @@ function TextControl(props: ControlProps) {
 /** Project Templates: where the computer keeps them, read only (the Finder stays on the desktop). */
 function Templates({ dir }: { dir: string | null }) {
   return (
-    <>
-      <Label>Project Templates</Label>
-      <Hint>{TEMPLATES_HELP}</Hint>
-      <Text style={styles.path} selectable>{dir || 'No templates folder on the computer.'}</Text>
-    </>
+    <SettingRow id="templates">
+      <Label>{TEMPLATES.label}</Label>
+      <Hint>{TEMPLATES.help}</Hint>
+      <Text style={styles.path} selectable>{dir || TEMPLATES.none}</Text>
+    </SettingRow>
   );
 }
 

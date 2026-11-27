@@ -260,8 +260,75 @@
     return { migrate: null, apply };
   }
 
+  // --- The settings search, of the desktop's Settings page and the phone's ---
+
+  /** The lists a search gives, in the order they show, with their headings. */
+  const SEARCH_GROUPS = [{ key: 'titles', label: 'Found in titles' }, { key: 'descriptions', label: 'Found in descriptions' }];
+
+  /** The words of a query, in lower case. */
+  const searchWords = query => String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+
+  /**
+   * The entries ({ title, description }) that answer `query`, each list in the
+   * order given: `titles` have every word in their title; `descriptions` are
+   * the others that have every word in their title or description.
+   */
+  function searchSettings(entries, query) {
+    const words = searchWords(query);
+    const titles = [];
+    const descriptions = [];
+    if (!words.length) return { titles, descriptions };
+    for (const entry of entries) {
+      const title = entry.title.toLowerCase();
+      if (words.every(w => title.includes(w))) { titles.push(entry); continue; }
+      const description = entry.description.toLowerCase();
+      if (words.every(w => title.includes(w) || description.includes(w))) descriptions.push(entry);
+    }
+    return { titles, descriptions };
+  }
+
+  /**
+   * `text` in pieces, in order, `match` true on the ones that are a word of
+   * `query`. Words that overlap give matching pieces one after the other.
+   */
+  function searchParts(text, query) {
+    const lower = text.toLowerCase();
+    const ranges = [];
+    for (const word of searchWords(query)) {
+      for (let i = lower.indexOf(word); i >= 0; i = lower.indexOf(word, i + word.length)) ranges.push([i, i + word.length]);
+    }
+    ranges.sort((a, b) => a[0] - b[0]);
+    const parts = [];
+    let done = 0;
+    const add = (from, to, match) => { if (to > from) parts.push({ text: text.slice(from, to), match }); };
+    for (const [from, to] of ranges) {
+      if (to <= done) continue;
+      const start = Math.max(from, done);
+      add(done, start, false);
+      add(start, to, true);
+      done = to;
+    }
+    add(done, text.length, false);
+    return parts;
+  }
+
+  /** Where a result is: "Tab › Section", the section left out when it is named as its tab. */
+  function searchWhere(tab, section) {
+    const same = section.toLowerCase() === tab.toLowerCase();
+    return [tab, same ? '' : section].filter(Boolean).join(' › ');
+  }
+
+  /** The line above the results; '' without a query. */
+  function searchStatus(query, count) {
+    const text = String(query || '').trim();
+    if (!text) return '';
+    if (!count) return `No setting matches “${text}”.`;
+    return count === 1 ? '1 setting found' : `${count} settings found`;
+  }
+
   const api = { DESKTOP_TABS, PHONE_TABS, FIELDS, EDITOR_PREFS, TERMINAL_THEME_CHOICES, ACCENT_DEFAULT, ACCENT_PRESETS,
-    KNOWLEDGE_CONFIG_FIELDS, KNOWLEDGE_SOURCE_LABELS, validateGlobalPatch, validateFolderPatch, effectiveGlobalValues, changedPatch, editorPrefsSync };
+    KNOWLEDGE_CONFIG_FIELDS, KNOWLEDGE_SOURCE_LABELS, validateGlobalPatch, validateFolderPatch, effectiveGlobalValues, changedPatch, editorPrefsSync,
+    SEARCH_GROUPS, searchSettings, searchParts, searchWhere, searchStatus };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SettingsModel = api;
 })(typeof window !== 'undefined' ? window : globalThis);

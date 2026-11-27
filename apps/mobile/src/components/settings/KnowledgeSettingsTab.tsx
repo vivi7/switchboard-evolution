@@ -1,9 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { Chips, ErrorText, Field, Hint, Label, MONO, SwitchRow } from '@/components/form';
 import { Section } from '@/components/project/Section';
+import { SettingRow, SettingsScroll } from '@/components/settings/found';
 import {
   binaryText,
   commitKnowledgeField,
@@ -53,28 +54,32 @@ export function KnowledgeSettingsTab() {
   const text = binaryText(binary.data);
   const data = config.data;
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets>
+    <SettingsScroll style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets>
       <Section title="Node Knowledge">
-        <Label>codebase-memory-mcp</Label>
-        <Text style={styles.status}>
-          {text.summary}
-          {text.problem ? <Text style={styles.problem}>{` · ${text.problem}`}</Text> : null}
-          {text.newer ? ` · ${text.newer}` : null}
-        </Text>
-        {text.path ? <Text style={styles.path} selectable>{text.path}</Text> : null}
+        <SettingRow id="program">
+          <Label>codebase-memory-mcp</Label>
+          <Text style={styles.status}>
+            {text.summary}
+            {text.problem ? <Text style={styles.problem}>{` · ${text.problem}`}</Text> : null}
+            {text.newer ? ` · ${text.newer}` : null}
+          </Text>
+          {text.path ? <Text style={styles.path} selectable>{text.path}</Text> : null}
+        </SettingRow>
         {usable && config.isError ? <ErrorText>{(config.error as Error)?.message || 'The computer did not answer.'}</ErrorText> : null}
         {usable && !data && !config.isError ? <ActivityIndicator style={styles.loading} color={colors.accent} /> : null}
         {data ? (
           <>
             <Hint>{CONFIG_NOTE}</Hint>
             {knowledgeFields(data.keys).map((field) => (
-              <Control key={field.key} field={field} kind={data.keys[field.key]} value={data.values[field.key]} {...saves} />
+              <SettingRow key={field.key} id={field.key}>
+                <Control field={field} kind={data.keys[field.key]} value={data.values[field.key]} {...saves} />
+              </SettingRow>
             ))}
           </>
         ) : null}
         <Text style={styles.closing}>{CLOSING}</Text>
       </Section>
-    </ScrollView>
+    </SettingsScroll>
   );
 }
 

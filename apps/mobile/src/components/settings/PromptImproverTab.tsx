@@ -1,8 +1,10 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
+import { SettingRow, SettingsScroll } from '@/components/settings/found';
 import { savePromptImproverSettings, usePromptImproverInfo } from '@/prompt-improver/queries';
+import { IMPROVER, IMPROVER_INTRO, templateOwner } from '@/settings/rows';
 import { cliLabel, type ImproverEngine, type ImproverMode, type PromptImproverSettings } from '@/shared/vendor/prompt-improver-model';
 import { colors, spacing } from '@/theme';
 
@@ -52,54 +54,69 @@ export function PromptImproverTab() {
   const custom = !!s.template;
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      <Text style={styles.intro}>
-        The ✦ button beside “/” in a session rewrites the prompt you are writing, with the commands, skills and MCP servers the session has.
-        The computer runs the CLI you are signed in to, once and out of sight, on your subscription. Nothing is sent for you.
-      </Text>
-      <ToggleRow label="Prompt improver" value={s.enabled} onChange={(enabled) => save({ enabled })} disabled={saving} />
-      <ToggleRow label="Ask before improving" help="A question before each run." value={s.confirm} onChange={(confirm) => save({ confirm })} disabled={saving} />
-      <View style={styles.card}>
-        <Text style={styles.label}>CLI that rewrites</Text>
-        <Text style={styles.help}>The commands and skills offered are always those of the session the prompt is for.</Text>
-        <Chips
-          items={ENGINES.filter((e) => e.key === 'session' || clis.includes(e.key) || e.key === s.engine)}
-          value={s.engine}
-          onChange={(engine) => save({ engine })}
-          disabled={saving}
-        />
-      </View>
-      <View style={styles.card}>
-        <Text style={styles.label}>Context</Text>
-        <Chips items={MODES} value={s.context} onChange={(context) => save({ context })} disabled={saving} />
-      </View>
-      <Stepper label="Last turns" help="Messages of the conversation that go with the prompt." value={s.recentTurns} min={0} max={20} step={1}
-        onChange={(recentTurns) => save({ recentTurns })} disabled={saving} />
-      <View style={styles.card}>
-        <Text style={styles.label}>Models</Text>
-        <Text style={styles.help}>{'As each CLI names them. Empty: the CLI\'s default.'}</Text>
-        {(['claude', 'codex', 'opencode'] as const).map((cli) => (
-          <ModelField key={`${cli}:${s.models[cli]}`} label={cliLabel(cli)} value={s.models[cli]} onSave={(m) => save({ models: { ...s.models, [cli]: m } })} />
-        ))}
-      </View>
-      <Stepper label="Time limit" help="Seconds before a run is stopped." value={s.timeoutSec} min={20} max={600} step={10}
-        onChange={(timeoutSec) => save({ timeoutSec })} disabled={saving} />
-      <Pressable
-        onPress={() => router.push('/prompt-improver-template')}
-        style={({ pressed }) => [styles.card, pressed && styles.pressed]}
-        accessibilityRole="button"
-        accessibilityLabel="Edit the improver prompt"
-      >
-        <Text style={styles.label}>Improver prompt</Text>
-        <Text style={styles.value}>{custom ? 'Yours' : 'The default one'}</Text>
-        <Text style={styles.help}>The instructions the CLI follows. The context the app adds after it is not shown.</Text>
-      </Pressable>
-      {custom ? (
-        <Pressable onPress={() => save({ template: null })} style={styles.button} accessibilityRole="button" disabled={saving}>
-          <Text style={styles.buttonText}>Reset the improver prompt to the default</Text>
+    <SettingsScroll style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <SettingRow id="enabled" style={styles.enabled}>
+        <Text style={styles.intro}>{IMPROVER_INTRO}</Text>
+        <ToggleRow label={IMPROVER.enabled.label} value={s.enabled} onChange={(enabled) => save({ enabled })} disabled={saving} />
+      </SettingRow>
+      <SettingRow id="confirm">
+        <ToggleRow label={IMPROVER.confirm.label} help={IMPROVER.confirm.help} value={s.confirm} onChange={(confirm) => save({ confirm })} disabled={saving} />
+      </SettingRow>
+      <SettingRow id="engine">
+        <View style={styles.card}>
+          <Text style={styles.label}>{IMPROVER.engine.label}</Text>
+          <Text style={styles.help}>{IMPROVER.engine.help}</Text>
+          <Chips
+            items={ENGINES.filter((e) => e.key === 'session' || clis.includes(e.key) || e.key === s.engine)}
+            value={s.engine}
+            onChange={(engine) => save({ engine })}
+            disabled={saving}
+          />
+        </View>
+      </SettingRow>
+      <SettingRow id="context">
+        <View style={styles.card}>
+          <Text style={styles.label}>{IMPROVER.context.label}</Text>
+          <Chips items={MODES} value={s.context} onChange={(context) => save({ context })} disabled={saving} />
+        </View>
+      </SettingRow>
+      <SettingRow id="turns">
+        <Stepper label={IMPROVER.turns.label} help={IMPROVER.turns.help} value={s.recentTurns} min={0} max={20} step={1}
+          onChange={(recentTurns) => save({ recentTurns })} disabled={saving} />
+      </SettingRow>
+      <SettingRow id="models">
+        <View style={styles.card}>
+          <Text style={styles.label}>{IMPROVER.models.label}</Text>
+          <Text style={styles.help}>{IMPROVER.models.help}</Text>
+          {(['claude', 'codex', 'opencode'] as const).map((cli) => (
+            <ModelField key={`${cli}:${s.models[cli]}`} label={cliLabel(cli)} value={s.models[cli]} onSave={(m) => save({ models: { ...s.models, [cli]: m } })} />
+          ))}
+        </View>
+      </SettingRow>
+      <SettingRow id="timeout">
+        <Stepper label={IMPROVER.timeout.label} help={IMPROVER.timeout.help} value={s.timeoutSec} min={20} max={600} step={10}
+          onChange={(timeoutSec) => save({ timeoutSec })} disabled={saving} />
+      </SettingRow>
+      <SettingRow id="template">
+        <Pressable
+          onPress={() => router.push('/prompt-improver-template')}
+          style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Edit the improver prompt"
+        >
+          <Text style={styles.label}>{IMPROVER.template.label}</Text>
+          <Text style={styles.value}>{templateOwner(custom)}</Text>
+          <Text style={styles.help}>{IMPROVER.template.help}</Text>
         </Pressable>
+      </SettingRow>
+      {custom ? (
+        <SettingRow id="reset">
+          <Pressable onPress={() => save({ template: null })} style={styles.button} accessibilityRole="button" disabled={saving}>
+            <Text style={styles.buttonText}>{IMPROVER.reset.label}</Text>
+          </Pressable>
+        </SettingRow>
       ) : null}
-    </ScrollView>
+    </SettingsScroll>
   );
 }
 
@@ -182,6 +199,8 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.sm },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.lg, backgroundColor: colors.background },
+  // The first setting's row: the switch and what it switches on.
+  enabled: { gap: spacing.sm },
   intro: { color: colors.textDim, fontSize: 13, lineHeight: 18, marginBottom: spacing.xs },
   card: { backgroundColor: colors.surface, borderRadius: 10, padding: spacing.md, gap: 4 },
   toggle: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
