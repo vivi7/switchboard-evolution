@@ -206,8 +206,11 @@ function renderKnowledgeTab(project, body) {
   const s = knState(project);
   if (!KN_VIEW_IDS.includes(s.view) || (!knViewRenderers[s.view] && s.view !== 'overview' && s.view !== 'settings')) s.view = 'overview';
   body.className = 'ws-body git-workspace-body kn-body';
+  // The bar of the views keeps where it was scrolled to when the tab is drawn again.
+  const navScroll = body.querySelector('.kn-nav')?.scrollLeft || 0;
   body.innerHTML = `${knSubnavHtml(project, s)}<div class="git-workspace-view kn-view" id="kn-view" role="tabpanel"></div>`;
   knWireSubnav(project, body);
+  bindScrollingTabs(body.querySelector('.kn-nav'), '.git-workspace-nav-btn.active', navScroll);
   s.gateSig = knGateSignature(project, s);
   knRenderView(project, body.querySelector('#kn-view'), body);
   if (s.stale || !s.status) {
@@ -234,7 +237,8 @@ function knStatusChanged(project) {
   }
   const holder = document.createElement('div');
   holder.innerHTML = knSubnavHtml(project, s);
-  bar.replaceWith(holder.firstElementChild);
+  // The views stay as they are, scrolled where they were; what is beside them is new.
+  bar.querySelector('.kn-subnav-side').replaceWith(holder.querySelector('.kn-subnav-side'));
   knWireSubnav(project, body);
 }
 

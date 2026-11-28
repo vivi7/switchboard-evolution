@@ -5534,7 +5534,7 @@ button.cm-status-item:disabled { cursor: default; }
   align-items: center;
   gap: 22px;
   /* A narrow window scrolls the tabs sideways instead of cutting them off
-     (projects-view.js bindWorkspaceTabs): no scrollbar, a fade on the side that has more. */
+     (projects-view.js bindScrollingTabs): no scrollbar, a fade on the side that has more. */
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -5542,9 +5542,21 @@ button.cm-status-item:disabled { cursor: default; }
 }
 .ws-tabs::-webkit-scrollbar { display: none; }
 .ws-tabs > * { flex-shrink: 0; }
-.ws-tabs.more-right { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
-.ws-tabs.more-left { mask-image: linear-gradient(to right, transparent, #000 28px); }
-.ws-tabs.more-left.more-right { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+.ws-tabs.more-right, .kn-nav.more-right { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.ws-tabs.more-left, .kn-nav.more-left { mask-image: linear-gradient(to right, transparent, #000 28px); }
+.ws-tabs.more-left.more-right, .kn-nav.more-left.more-right { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+/* A scrolling bar and its arrows (projects-view.js addScrollArrows): each over the end that has more, on its fade. */
+.tabs-scroll { position: relative; display: flex; max-width: 100%; min-width: 0; }
+.tabs-scroll > .ws-tabs { flex: 1; }
+.tabs-arrow {
+  display: none; position: absolute; top: 0; bottom: 0; width: 24px; padding: 0; align-items: center; justify-content: center;
+  border: 1px solid rgba(255,255,255,0.14); border-radius: 7px; background: #23232d; color: #c8c8dc; cursor: pointer;
+}
+.tabs-arrow:hover { background: #2d2d3a; color: #fff; }
+.tabs-arrow--left { left: 0; }
+.tabs-arrow--right { right: 0; }
+.ws-tabs ~ .tabs-arrow { top: 7px; bottom: 7px; }
+.more-left ~ .tabs-arrow--left, .more-right ~ .tabs-arrow--right { display: flex; }
 
 .ws-tab {
   white-space: nowrap;
@@ -9770,7 +9782,8 @@ body.file-window .markdown-preview { flex: 1; min-height: 0; }
 /* ---- Node Knowledge tab (project-knowledge-view.js) ---- */
 .kn-body .mono, .kn-table td, .kn-mono { font-family: 'SF Mono', 'Fira Code', Menlo, monospace; font-size: 11px; }
 .kn-subnav { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.kn-nav { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+/* A narrow window scrolls the views sideways, as the project's tabs (projects-view.js bindScrollingTabs). */
+.kn-nav { max-width: 100%; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .kn-nav::-webkit-scrollbar { display: none; }
 .kn-nav .git-workspace-nav-btn { white-space: nowrap; }
 .kn-subnav-side { display: flex; align-items: center; gap: 10px; min-width: 0; }
