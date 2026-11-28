@@ -12,7 +12,7 @@
   const host = document.getElementById('file-window');
   const panel = new ViewerPanel(host, {
     copyPath: true, copyContent: true, language: 'auto', storageKey: 'markdownPreviewMode',
-    onSave: (path, content) => window.api.saveFileForPanel(path, content),
+    onSave: (path, content, options) => window.api.saveFileForPanel(path, content, options),
   });
   // The pin closes the toolbar's row of buttons.
   const pin = document.getElementById('tool-window-pin');
@@ -28,6 +28,12 @@
 
   let result;
   try { result = await window.api.readFileForPanel(filePath); } catch (err) { result = { ok: false, error: err.message }; }
+  // Unsaved text of a file that is gone is still shown, to be saved again.
+  const draft = result?.ok ? null : window.api.getDraft?.(filePath);
+  if (draft) {
+    panel.open(name, filePath, draft.base, { missing: true });
+    return;
+  }
   if (await openUnsupportedFile(result, filePath)) {
     panel.toolbar.setTitle(name);
     panel.toolbar.setPath(filePath);

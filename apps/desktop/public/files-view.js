@@ -2,9 +2,11 @@
 // The agent files (main.js get-memories), the files opened by dropping them on
 // the sidebar (files-drop.js; main.js get-opened-files) and the pinned ones,
 // in the sections files-list.js decides. A file opens in the main area's
-// editor (memoryPanel) or in a window of its own (main.js openFileWindow).
+// editor, a tab for each (editor-tabs.js), or in a window of its own (main.js
+// openFileWindow). The files with unsaved changes (file-drafts.js), wherever
+// they were edited, are listed first, and the sidebar's tab shows a dot.
 //
-// Depends on globals: memoryContent, memoryPanel, memoryViewer, placeholder,
+// Depends on globals: memoryContent, memoryViewer, placeholder, EditorTabs,
 // terminalArea, planViewer, statsViewer, settingsViewer, processViewer,
 // activeTab (app.js); buildFilesSections, filesSectionsEmpty, loadFilesFilter,
 // saveFilesFilter, pinnedStep, pinnedDropIndex (files-list.js); formatDate
@@ -18,6 +20,10 @@ let filesFilter = loadFilesFilter(localStorage);
 let filesMatchIds = null;
 let currentMemoryFilePath = null;
 let filesOpenRequest = 0;
+let filesEditorTabs = null;
+// The files with unsaved changes: [{ filePath, updatedAt, exists }].
+let cachedDrafts = [];
+let draftsReloadTimer = null;
 const memoryCollapsedState = new Map();
 const filesFilterSelect = document.getElementById('files-filter-select');
 const PINNED_FILE_TYPE = 'application/x-switchboard-pinned-file';
@@ -93,7 +99,9 @@ function renderFiles(matchIds = null) {
     agents: cachedMemoryData, opened: cachedOpenedFiles, filter: filesFilter, matchIds,
   });
   memoryContent.innerHTML = '';
-  if (filesSectionsEmpty(sections)) {
+  // A search shows what it found; otherwise the unsaved files come first.
+  const unsaved = matchIds ? [] : cachedDrafts;
+  if (filesSectionsEmpty(sections) && !unsaved.length) {
     const empty = document.createElement('div');
     empty.className = 'plans-empty';
     empty.textContent = filesEmptyText(matchIds);
@@ -101,6 +109,10 @@ function renderFiles(matchIds = null) {
     return;
   }
   const openedPaths = new Set(cachedOpenedFiles.opened.map(f => f.filePath));
+  if (unsaved.length) {
+    const rows = unsaved.map(buildUnsavedItem);
+    memoryContent.appendChild(buildMemoryGroup('__unsaved__', 'Unsaved changes', rows, { className: 'files-unsaved-group' }));
+  }
   if (sections.pinned.length) {
     const rows = sections.pinned.map(p => buildFileItem(p.file, { agent: p.agent, opened: p.opened, pinned: true }));
     memoryContent.appendChild(buildMemoryGroup('__pinned__', 'Pinned', rows, { className: 'files-pinned-group' }));
@@ -241,6 +253,43 @@ function buildFileItem(file, { agent, opened, pinned }) {
   return item;
 }
 
+/** A file with unsaved changes: opening it shows them, also when the file itself is gone. */
+function buildUnsavedItem(draft) {
+  const file = {
+    filePath: draft.filePath, filename: fileBaseName(draft.filePath),
+    displayPath: draft.filePath, modified: draft.updatedAt, exists: true,
+  };
+  const item = buildFileItem(file, {
+    agent: isAgentFilePath(draft.filePath), opened: false,
+    pinned: isPinnedFilePath(draft.filePath),
+  });
+  if (!draft.exists) item.querySelector('.session-meta').textContent = 'File not found · changes kept';
+  return item;
+}
+
+// --- Files with unsaved changes ---
+
+async function loadDrafts() {
+  const drafts = await window.api.listDrafts().catch(() => null);
+  if (!Array.isArray(drafts)) return;
+  const paths = list => list.map(d => d.filePath).join('\n');
+  const changed = paths(drafts) !== paths(cachedDrafts);
+  cachedDrafts = drafts;
+  const tab = document.querySelector('.sidebar-tab[data-tab="memory"]');
+  tab?.classList.toggle('has-unsaved', drafts.length > 0);
+  if (changed && activeTab === 'memory') renderFiles(filesMatchIds);
+}
+
+// A project window has no sidebar to list them in (project-window.js).
+if (window.api.listDrafts && !(typeof PROJECT_WINDOW !== 'undefined' && PROJECT_WINDOW)) {
+  window.addEventListener('viewer-drafts-changed', () => {
+    clearTimeout(draftsReloadTimer);
+    draftsReloadTimer = setTimeout(loadDrafts, 500);
+  });
+  // The scripts after this one declare what drawing the list needs.
+  setTimeout(loadDrafts, 0);
+}
+
 function offerRemoveMissing(file, { opened, pinned }) {
   if (!opened && !pinned) return;
   const what = !opened ? 'Unpin it?'
@@ -360,22 +409,46 @@ function markActiveFile(filePath) {
   return target;
 }
 
-/** Show the file in the main area's editor, whatever its kind (text, image, PDF…). */
-async function openFileHere(filePath) {
-  // Unsaved changes in the file shown: Save, Don't Save or stay on it.
-  if (memoryPanel.filePath && memoryPanel.filePath !== filePath && !(await memoryPanel.confirmLeave())) return;
-  const request = ++filesOpenRequest;
-  currentMemoryFilePath = filePath;
-  const row = markActiveFile(filePath);
-  if (row) row.scrollIntoView({ block: 'nearest' });
+const FILES_TABS_KEY = 'editorTabs:files';
 
-  let result;
-  try { result = await window.api.readFileForPanel(filePath); } catch (err) { result = { ok: false, error: err.message }; }
-  if (request !== filesOpenRequest) return;
-  if (await openUnsupportedFile(result, filePath)) return;
-  if (!result?.ok) { alert(result?.error || 'Unable to open the file.'); return; }
+/** The files open when the app last closed, back in the main area when nothing else is in it. */
+function restoreFilesEditor() {
+  if (placeholder.style.display === 'none' || !localStorage.getItem(FILES_TABS_KEY)) return;
+  const tab = ensureFilesEditor().lastUsed();
+  if (tab) openFileHere(tab.path);
+}
 
-  // Show memory viewer in main area
+function ensureFilesEditor() {
+  if (filesEditorTabs) return filesEditorTabs;
+  filesEditorTabs = new EditorTabs(memoryViewer, {
+    storageKey: FILES_TABS_KEY,
+    createPanel: (element, tab, shared) => new ViewerPanel(element, {
+      ...shared,
+      copyPath: true, copyContent: true, language: 'auto', storageKey: 'markdownPreviewMode',
+      onSave: (filePath, content, options) => saveFilesViewFile(filePath, content, options),
+      onPopOut: () => popOutCurrentFile(tab.panel),
+      // Go to Definition into another file: in a tab of its own.
+      openFile: (filePath, at) => openFileHere(filePath, at),
+    }),
+    onSelect: (tab) => openFileHere(tab.path),
+    projectName: (tab) => editorProjectName(tab.path),
+    onActivate: (tab) => {
+      currentMemoryFilePath = tab?.path || null;
+      if (tab) markActiveFile(tab.path);
+      else memoryContent.querySelectorAll('.memory-item.active').forEach(el => el.classList.remove('active'));
+    },
+    // The last file closed: nothing left to show here.
+    onEmpty: () => {
+      if (memoryViewer.style.display === 'none') return;
+      memoryViewer.style.display = 'none';
+      placeholder.style.display = '';
+    },
+  });
+  return filesEditorTabs;
+}
+
+/** The main area's editor in sight. */
+function showFilesViewer() {
   if (typeof hideProjectChrome === 'function') hideProjectChrome();
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
@@ -386,8 +459,51 @@ async function openFileHere(filePath) {
   // The message history sits over this viewer when it stays shown (and takes its Cmd+F).
   jsonlViewer.style.display = 'none';
   memoryViewer.style.display = 'flex';
+}
 
-  memoryPanel.open(fileBaseName(filePath), filePath, result.content || '', result);
+/**
+ * Show the file in the main area's editor, whatever its kind (text, image,
+ * PDF…), in its own tab, at { line, column } when given. Resolves to the tab's
+ * viewer, or null when the file cannot be shown.
+ */
+async function openFileHere(filePath, { line, column } = {}) {
+  const tabs = ensureFilesEditor();
+  const request = ++filesOpenRequest;
+  let tab = tabs.find(filePath);
+  // A file already open keeps its tab, with whatever is typed in it.
+  if (!tab?.loaded) {
+    let result;
+    try { result = await window.api.readFileForPanel(filePath); } catch (err) { result = { ok: false, error: err.message }; }
+    if (request !== filesOpenRequest) return null;
+    tab = tabs.find(filePath);
+    // Unsaved text of a file that is gone is still shown, to be saved again.
+    const draft = result?.ok ? null : window.api.getDraft?.(filePath);
+    if (!result?.ok && !draft) {
+      if (tab && !tab.loaded) tabs.remove(tab);
+      if (await openUnsupportedFile(result, filePath)) return null;
+      alert(result?.error || 'Unable to open the file.');
+      return null;
+    }
+    tab = tabs.add(filePath);
+    if (!tab.loaded) tabs.fill(tab, draft ? draft.base : result.content || '', draft ? { missing: true } : result);
+  }
+
+  showFilesViewer();
+  tabs.activate(tab);
+  markActiveFile(filePath)?.scrollIntoView({ block: 'nearest' });
+  if (line) tab.panel.goToLocation(line, column);
+  return tab.panel;
+}
+
+/** After a file action of an explorer: the tabs follow a rename or a move, and close what went to the Trash. */
+async function applyFilesViewFileAction(change) {
+  const tabs = ensureFilesEditor();
+  for (const tab of [...tabs.tabs]) {
+    const next = remapFileActionPath(tab.path, change);
+    if (next === tab.path) continue;
+    if (next) await tabs.relocate(tab, next);
+    else tabs.remove(tab, { discard: true });
+  }
 }
 
 function openFileInWindow(filePath) {
@@ -397,23 +513,23 @@ function openFileInWindow(filePath) {
 }
 
 /** The editor's pop-out: what it shows, saved first, in a window of its own. */
-async function popOutCurrentFile() {
-  const filePath = memoryPanel.filePath;
+async function popOutCurrentFile(panel) {
+  const filePath = panel?.filePath;
   if (!filePath) return;
-  if (memoryPanel.isDirty()) await memoryPanel.flush();
+  if (panel.isDirty()) await panel.flush();
   openFileInWindow(filePath);
 }
 
 /** The editor's Save: agent files as before (save-memory), any other file as the file panel does. */
-function saveFilesViewFile(filePath, content) {
-  return isAgentFilePath(filePath) && /\.md$/i.test(filePath)
+function saveFilesViewFile(filePath, content, options) {
+  return !options?.create && isAgentFilePath(filePath) && /\.md$/i.test(filePath)
     ? window.api.saveMemory(filePath, content)
-    : window.api.saveFileForPanel(filePath, content);
+    : window.api.saveFileForPanel(filePath, content, options);
 }
 
 /**
- * Files dropped on the sidebar (files-drop.js): into the list, then on the
- * Files tab's editor (`here`) or each in a window of its own (`window`).
+ * Files dropped on the sidebar (files-drop.js): into the list, then each in a
+ * tab of the Files tab's editor (`here`) or in a window of its own (`window`).
  */
 async function openDroppedFiles(paths, target) {
   if (!paths.length) return;
@@ -436,5 +552,6 @@ async function openDroppedFiles(paths, target) {
   if (filesFilter === 'agents') setFilesFilter('all');
   if (activeTab !== 'memory') document.querySelector('.sidebar-tab[data-tab="memory"]')?.click();
   else renderFiles(filesMatchIds);
-  await openFileHere(files[0]);
+  for (const filePath of files) await openFileHere(filePath);
+  if (files.length > 1) await openFileHere(files[0]);
 }

@@ -4,10 +4,12 @@
  * Manages a collapsible panel to the right of the terminal that shows
  * files and diffs received from the MCP bridge.
  *
- * For files: delegates to a ViewerPanel instance (shared component).
- * For diffs: uses its own MergeView rendering with accept/reject.
+ * For files: each session has its own open files in tabs (editor-tabs.js),
+ * each with its ViewerPanel, remembered across restarts.
+ * For diffs: uses its own MergeView rendering with accept/reject, in the files'
+ * place until it is answered or closed.
  *
- * Globals expected: window.api, window.ViewerPanel,
+ * Globals expected: window.api, window.ViewerPanel, window.EditorTabs,
  *   window.createMergeViewer, window.createUnifiedMergeViewer,
  *   window.createViewerToolbar, openSessions (from app.js)
  */
@@ -31,8 +33,8 @@ let projectBrowserTreeEl = null;
 let projectBrowserRootEl = null;
 let projectBrowserToggleEl = null;
 
-// ViewerPanel instance for file-type tabs
-let fpViewerPanel = null;
+// Holds every session's file tabs; only the shown session's are seen
+let fileViewerEl = null;
 
 // Diff-specific DOM
 let diffToolbarEl = null;
@@ -82,18 +84,11 @@ function initFilePanel() {
   filePanelWorkspaceEl.id = 'file-panel-workspace';
   filePanelContentEl.appendChild(filePanelWorkspaceEl);
 
-  // ── ViewerPanel for file-type tabs ──
-  const vpContainer = document.createElement('div');
-  vpContainer.id = 'file-panel-viewer';
-  vpContainer.style.display = 'none';
-  filePanelWorkspaceEl.appendChild(vpContainer);
-
-  fpViewerPanel = new ViewerPanel(vpContainer, {
-    language: 'auto',
-    storageKey: 'markdownPreviewMode',
-    onSave: (filePath, content) => window.api.saveFileForPanel(filePath, content),
-    onClose: handleClose,
-  });
+  // ── File tabs ──
+  fileViewerEl = document.createElement('div');
+  fileViewerEl.id = 'file-panel-viewer';
+  fileViewerEl.style.display = 'none';
+  filePanelWorkspaceEl.appendChild(fileViewerEl);
 
   // ── Diff-specific UI ──
   const diffContainer = document.createElement('div');
@@ -130,7 +125,7 @@ function initFilePanel() {
   const diffCloseBtn = document.createElement('button');
   diffCloseBtn.className = 'fp-toolbar-btn fp-close-btn fp-icon-btn';
   diffCloseBtn.innerHTML = '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 512 512" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M400 145.49 366.51 112 256 222.51 145.49 112 112 145.49 222.51 256 112 366.51 145.49 400 256 289.49 366.51 400 400 366.51 289.49 256 400 145.49z"></path></svg>';
-  diffCloseBtn.title = 'Close panel';
+  diffCloseBtn.title = 'Close diff';
   diffCloseBtn.addEventListener('click', handleClose);
   diffControls.appendChild(diffCloseBtn);
 
@@ -157,34 +152,23 @@ function initFilePanel() {
 
 // ── Handlers ────────────────────────────────────────────────────────
 
+/** The ✕ of the diff shown, or of the file shown (its tab). */
 function handleClose() {
   if (!currentPanelSessionId) return;
   const state = getSessionState(currentPanelSessionId);
   const tab = state.currentTab;
 
-  if (tab) {
-    if (tab.type === 'diff' && !tab.resolved) {
-      window.api.mcpDiffResponse(currentPanelSessionId, tab.diffId, 'reject', null);
-    }
-    if (tab.type === 'diff' && tab.editorView) {
-      tab.editorView.destroy();
-      tab.editorView = null;
-    }
-    if (tab.type === 'file') {
-      fpViewerPanel.destroy();
-      fpShownTab = null;
-      state.selectedPath = '';
-    }
-    state.currentTab = null;
+  if (tab?.type === 'diff') {
+    if (!tab.resolved) window.api.mcpDiffResponse(currentPanelSessionId, tab.diffId, 'reject', null);
+    leaveDiffTab(currentPanelSessionId, state);
+    return;
   }
-
-  state.panelVisible = state.explorerVisible;
-  if (state.panelVisible) {
-    showPanel(state);
-    renderPanel(currentPanelSessionId);
-  } else {
-    hidePanel();
+  const file = tab && state.editors?.find(tab.filePath);
+  if (file) {
+    state.editors.close(file);
+    return;
   }
+  closeEmptyPanel(currentPanelSessionId, state);
 }
 
 /** A diff editor's text with its file's line breaks (CRLF stays CRLF). */
@@ -272,6 +256,8 @@ function getSessionState(sessionId) {
       selectedPath: '',
       browserError: '',
       browserGeneration: 0,
+      editors: null,       // the session's file tabs (EditorTabs), made when first needed
+      editorHost: null,
     });
   }
   return filePanelState.get(sessionId);
@@ -286,8 +272,14 @@ function setSessionMcpActive(sessionId, active) {
 function rekeyFilePanelState(oldId, newId) {
   const state = filePanelState.get(oldId);
   if (state) {
+    const replaced = filePanelState.get(newId);
+    if (replaced && replaced !== state) {
+      replaced.editors?.destroy();
+      replaced.editorHost?.remove();
+    }
     filePanelState.delete(oldId);
     filePanelState.set(newId, state);
+    state.editors?.setStorageKey(fileTabsKey(newId));
   }
   if (currentPanelSessionId === newId) {
     updateProjectBrowserToggle();
@@ -312,7 +304,7 @@ function sessionIdForState(state, fallbackId) {
 function openDiffTab(sessionId, diffId, data) {
   const state = getSessionState(sessionId);
 
-  // Destroy previous
+  // A diff shown before goes; the files stay open behind this one.
   destroyCurrentTab(state);
 
   state.currentTab = {
@@ -334,21 +326,25 @@ function openDiffTab(sessionId, diffId, data) {
   }
 }
 
+/** Show a file just read, in its tab. Unsaved changes in that tab stay. */
 function openFileTab(sessionId, data) {
   const state = getSessionState(sessionId);
 
-  // Destroy previous
   destroyCurrentTab(state);
 
-  state.currentTab = {
-    type: 'file',
-    label: basename(data.filePath),
-    filePath: data.filePath,
-    content: data.content,
-    preview: data,
-  };
-
+  const editors = fileEditors(sessionId, state);
+  const tab = editors.add(data.filePath);
+  showingFile(state, tab.path);
   state.panelVisible = true;
+
+  if (!tab.loaded) {
+    // Put in the editor when the session is shown.
+    tab.pending = data;
+  } else if (!tab.panel.isDirty()) {
+    editors.fill(tab, data.content, data);
+  } else if (data.line) {
+    tab.panel.goToLocation(data.line, data.column);
+  }
 
   if (currentPanelSessionId === sessionId) {
     showPanel(state);
@@ -356,46 +352,146 @@ function openFileTab(sessionId, data) {
   }
 }
 
-// Every session's file tab shares fpViewerPanel. This is the tab whose buffer
-// it holds. Showing another tab first copies the buffer (unsaved edits and the
-// cursor) back onto this one, and repainting this tab leaves the buffer alone,
-// so switching sessions or toggling the explorer never drops typed text.
-let fpShownTab = null;
+// ── File Tabs ───────────────────────────────────────────────────────
 
-function stashViewerBuffer() {
-  if (!fpShownTab || !fpViewerPanel.editorView) return;
-  fpShownTab.content = fpViewerPanel.getContent();
-  fpShownTab.cursor = fpViewerPanel.editorView.state.selection.main.head;
+function fileTabsKey(sessionId) {
+  return `filePanelTabs:${sessionId}`;
 }
 
-function showFileTab(tab) {
-  if (fpShownTab === tab && fpViewerPanel.filePath === tab.filePath) return;
-  stashViewerBuffer();
-  fpViewerPanel.open(tab.label, tab.filePath, tab.content, tab.preview);
-  fpShownTab = tab;
-  const view = fpViewerPanel.editorView;
-  if (view && Number.isSafeInteger(tab.cursor)) {
-    view.dispatch({ selection: { anchor: Math.min(tab.cursor, view.state.doc.length) }, scrollIntoView: true });
+/** `currentTab` is the file at `filePath`; the same object while it stays that one. */
+function showingFile(state, filePath) {
+  if (state.currentTab?.type !== 'file' || state.currentTab.filePath !== filePath) {
+    state.currentTab = { type: 'file', filePath };
   }
+}
+
+/** The session's file tabs, with those it had open when the app last closed. */
+function fileEditors(sessionId, state) {
+  if (state.editors) return state.editors;
+  const idNow = () => sessionIdForState(state, sessionId);
+  state.editorHost = document.createElement('div');
+  state.editorHost.className = 'file-panel-session';
+  state.editorHost.style.display = 'none';
+  fileViewerEl.appendChild(state.editorHost);
+  state.editors = new window.EditorTabs(state.editorHost, {
+    storageKey: fileTabsKey(sessionId),
+    createPanel: (element, tab, shared) => new window.ViewerPanel(element, {
+      ...shared,
+      language: 'auto',
+      storageKey: 'markdownPreviewMode',
+      onSave: (filePath, content, options) => window.api.saveFileForPanel(filePath, content, options),
+      onClose: () => state.editors.close(tab),
+      // Go to Definition into another file: in a tab of its own.
+      openFile: (filePath, at) => openFileInPanel(idNow(), filePath, at),
+    }),
+    onSelect: (tab) => selectFileTab(state, tab),
+    projectName: (tab) => editorProjectName(tab.path),
+    onActivate: (tab) => {
+      if (!tab || state.currentTab?.type === 'diff') return;
+      showingFile(state, tab.path);
+      selectBrowserFile(idNow(), state, tab.path);
+    },
+    onRemove: (tab) => {
+      if (state.selectedPath && projectEntryPath(state.projectPath, state.selectedPath) === tab.path) {
+        state.selectedPath = '';
+        renderProjectBrowser(idNow());
+      }
+    },
+    // The last file closed: the explorer stays, if it is open.
+    onEmpty: () => {
+      if (state.currentTab?.type !== 'diff') closeEmptyPanel(idNow(), state);
+    },
+  });
+  return state.editors;
+}
+
+/** The explorer marks the file shown, when it is one of the session's project. */
+function selectBrowserFile(sessionId, state, filePath) {
+  const root = state.projectPath;
+  if (!root || !(filePath.startsWith(`${root}/`) || filePath.startsWith(`${root}\\`))) return;
+  const relativePath = filePath.slice(root.length + 1).split('\\').join('/');
+  if (state.selectedPath === relativePath) return;
+  state.selectedPath = relativePath;
+  renderProjectBrowser(sessionId);
+}
+
+function closeEmptyPanel(sessionId, state) {
+  state.currentTab = null;
+  state.panelVisible = state.explorerVisible;
+  if (currentPanelSessionId !== sessionId) return;
+  if (state.panelVisible) {
+    showPanel(state);
+    renderPanel(sessionId);
+  } else {
+    hidePanel();
+  }
+}
+
+/** The files open when the app last closed come back with their session. */
+function restoreFileTabs(sessionId, state) {
+  if (state.editors || !fileViewerEl || !localStorage.getItem(fileTabsKey(sessionId))) return;
+  const tab = fileEditors(sessionId, state).lastUsed();
+  if (!tab || state.currentTab) return;
+  showingFile(state, tab.path);
+  state.panelVisible = true;
+}
+
+/** Read a tab's file into it. One that cannot be read, with nothing unsaved kept, goes. */
+async function loadFileTab(editors, tab, { quiet = false } = {}) {
+  let result = tab.pending;
+  if (!result) {
+    try { result = await window.api.readFileForPanel(tab.path); } catch (err) { result = { ok: false, error: err.message }; }
+  }
+  if (!editors.tabs.includes(tab) || tab.loaded) return;
+  // A newer read may have come while this one ran (openFileTab).
+  result = tab.pending || result;
+  tab.pending = null;
+  // `pending` data (the CLI's openFile) has no `ok`.
+  if (result && result.ok !== false) {
+    editors.fill(tab, result.content, { ...result, filePath: tab.path });
+    return;
+  }
+  // Unsaved text of a file that is gone is still shown, to be saved again.
+  const draft = window.api.getDraft?.(tab.path);
+  if (draft) {
+    editors.fill(tab, draft.base, { missing: true });
+    return;
+  }
+  editors.remove(tab);
+  if (!quiet) alert(result?.error || 'Unable to open the file.');
+}
+
+/** A tab picked, or brought back after a restart: read when needed, then shown. */
+async function selectFileTab(state, tab, options) {
+  const editors = state.editors;
+  if (state.currentTab?.type !== 'diff') showingFile(state, tab.path);
+  if (!tab.loaded) {
+    tab.loading ||= loadFileTab(editors, tab, options).finally(() => { tab.loading = null; });
+    await tab.loading;
+  }
+  // Another file was asked for while this one was read.
+  if (!tab.loaded || (state.currentTab?.type === 'file' && state.currentTab.filePath !== tab.path)) return;
+  editors.activate(tab);
+}
+
+function showFileTab(sessionId, state) {
+  const editors = fileEditors(sessionId, state);
+  const tab = editors.find(state.currentTab.filePath);
+  if (!tab) return;
+  if (!tab.loaded) selectFileTab(state, tab, { quiet: true });
+  else if (editors.active !== tab) editors.activate(tab);
+  else tab.panel.editorView?.requestMeasure?.();
 }
 
 function destroyCurrentTab(state) {
   const tab = state.currentTab;
-  if (!tab) return;
-  if (tab.type === 'diff' && tab.editorView) {
-    tab.editorView.destroy();
-    tab.editorView = null;
-    // Clear stale search/goto-line bar references
-    if (diffBodyEl) {
-      delete diffBodyEl._cmSearchBar;
-      delete diffBodyEl._cmGotoLine;
-    }
-  }
-  // A background session's tab is not in the viewer; the one shown may be
-  // another session's file, which must not be wiped.
-  if (tab.type === 'file' && fpShownTab === tab) {
-    fpViewerPanel.destroy();
-    fpShownTab = null;
+  if (tab?.type !== 'diff' || !tab.editorView) return;
+  tab.editorView.destroy();
+  tab.editorView = null;
+  // Clear stale search/goto-line bar references
+  if (diffBodyEl) {
+    delete diffBodyEl._cmSearchBar;
+    delete diffBodyEl._cmGotoLine;
   }
 }
 
@@ -403,27 +499,41 @@ async function openFileInPanel(sessionId, filePath, location = {}) {
   const state = getSessionState(sessionId);
   if (state.currentTab?.type === 'diff' && !state.currentTab.resolved) {
     alert('Resolve or close the current diff before opening a file.');
-    return;
+    return null;
   }
   const request = state.fileOpenRequest = (state.fileOpenRequest || 0) + 1;
-  // Clicking another reference to the same file keeps its unsaved edits.
-  if (currentPanelSessionId === sessionId && state.currentTab?.type === 'file' && fpViewerPanel.filePath === filePath) {
-    if (location.line) fpViewerPanel.goToLocation(location.line, location.column);
-    showPanel(state);
-    return;
+  // A file already open keeps its tab, with whatever is typed in it.
+  const open = state.editors?.find(filePath);
+  if (open?.loaded) {
+    destroyCurrentTab(state);
+    showingFile(state, filePath);
+    state.panelVisible = true;
+    state.editors.activate(open);
+    if (currentPanelSessionId === sessionId) {
+      showPanel(state);
+      renderPanel(sessionId);
+    }
+    if (location.line) open.panel.goToLocation(location.line, location.column);
+    open.panel.editorView?.focus?.();
+    return open.panel;
   }
-  // Unsaved changes in the file shown: Save, Don't Save or stay on it.
-  if (currentPanelSessionId === sessionId && state.currentTab?.type === 'file' && fpViewerPanel.filePath
-    && !(await fpViewerPanel.confirmLeave())) return;
-  if (state.fileOpenRequest !== request) return;
   const previousTab = state.currentTab;
   let result;
   try { result = await window.api.readFileForPanel(filePath); } catch (err) { result = { ok: false, error: err.message }; }
   const effectiveSessionId = sessionIdForState(state, sessionId);
-  if (!effectiveSessionId || currentPanelSessionId !== effectiveSessionId || state.fileOpenRequest !== request || state.currentTab !== previousTab) return;
-  if (await openUnsupportedFile(result, filePath)) return;
-  if (!result?.ok) { alert(result?.error || 'Unable to open the file.'); return; }
+  if (!effectiveSessionId || currentPanelSessionId !== effectiveSessionId || state.fileOpenRequest !== request || state.currentTab !== previousTab) return null;
+  const draft = result?.ok ? null : window.api.getDraft?.(filePath);
+  if (draft) {
+    result = { ok: true, content: draft.base, missing: true };
+  } else {
+    if (await openUnsupportedFile(result, filePath)) return null;
+    if (!result?.ok) { alert(result?.error || 'Unable to open the file.'); return null; }
+  }
   openFileTab(effectiveSessionId, { ...result, filePath, line: location.line, column: location.column });
+  const tab = state.editors.find(filePath);
+  if (!tab) return null;
+  await selectFileTab(state, tab);
+  return tab.panel;
 }
 
 async function openProjectFile(sessionId, relativePath) {
@@ -439,6 +549,13 @@ async function openProjectFile(sessionId, relativePath) {
   state.selectedPath = relativePath;
   state.browserError = '';
   renderProjectBrowser(sessionId);
+
+  // A file already open keeps its tab, with whatever is typed in it.
+  const open = state.editors?.find(projectEntryPath(requestedRoot, relativePath));
+  if (open?.loaded) {
+    await openFileInPanel(sessionId, open.path);
+    return;
+  }
 
   const result = await window.api.readProjectFile(requestedRoot, relativePath);
   if (state.projectPath !== requestedRoot || state.selectedPath !== relativePath) return;
@@ -457,17 +574,7 @@ async function openProjectFile(sessionId, relativePath) {
 
 function closeAllDiffs(sessionId) {
   const state = filePanelState.get(sessionId);
-  if (!state) return;
-
-  if (state.currentTab?.type === 'diff') {
-    destroyCurrentTab(state);
-    state.currentTab = null;
-    state.panelVisible = state.explorerVisible;
-    if (currentPanelSessionId === sessionId) {
-      if (state.panelVisible) renderPanel(sessionId);
-      else hidePanel();
-    }
-  }
+  if (state?.currentTab?.type === 'diff') leaveDiffTab(sessionId, state);
 }
 
 function closeDiffByDiffId(sessionId, diffId) {
@@ -476,9 +583,15 @@ function closeDiffByDiffId(sessionId, diffId) {
   if (state.currentTab.type !== 'diff' || state.currentTab.diffId !== diffId) return;
 
   state.currentTab.resolved = true;
+  leaveDiffTab(sessionId, state);
+}
+
+/** The diff goes; the file shown before it, if any, is back. */
+function leaveDiffTab(sessionId, state) {
   destroyCurrentTab(state);
-  state.currentTab = null;
-  state.panelVisible = state.explorerVisible;
+  const file = state.editors?.active || state.editors?.lastUsed();
+  state.currentTab = file ? { type: 'file', filePath: file.path } : null;
+  state.panelVisible = state.explorerVisible || !!state.currentTab;
   if (currentPanelSessionId === sessionId) {
     if (state.panelVisible) renderPanel(sessionId);
     else hidePanel();
@@ -514,6 +627,7 @@ function switchPanel(sessionId) {
   }
 
   const state = getSessionState(sessionId);
+  restoreFileTabs(sessionId, state);
 
   if (state.panelVisible && (state.currentTab || state.explorerVisible)) {
     showPanel(state);
@@ -553,13 +667,17 @@ function renderPanel(sessionId) {
 }
 
 function renderTabContent(sessionId, tab) {
-  const vpContainer = document.getElementById('file-panel-viewer');
   const diffContainer = document.getElementById('file-panel-diff');
+  const state = getSessionState(sessionId);
+
+  for (const other of filePanelState.values()) {
+    if (other.editorHost) other.editorHost.style.display = other === state && tab?.type === 'file' ? 'flex' : 'none';
+  }
 
   if (!tab) {
     filePanelContentEl.classList.add('browser-only');
     filePanelWorkspaceEl.style.display = 'none';
-    vpContainer.style.display = 'none';
+    fileViewerEl.style.display = 'none';
     diffContainer.style.display = 'none';
     return;
   }
@@ -568,13 +686,14 @@ function renderTabContent(sessionId, tab) {
   filePanelWorkspaceEl.style.display = 'flex';
 
   if (tab.type === 'file') {
-    // Use ViewerPanel
     diffContainer.style.display = 'none';
-    vpContainer.style.display = 'flex';
-    showFileTab(tab);
+    fileViewerEl.style.display = 'flex';
+    showFileTab(sessionId, state);
+    // Made above when it was not there yet.
+    state.editorHost.style.display = 'flex';
   } else {
     // Diff mode
-    vpContainer.style.display = 'none';
+    fileViewerEl.style.display = 'none';
     diffContainer.style.display = 'flex';
     renderDiffContent(sessionId, tab);
   }
@@ -861,34 +980,29 @@ async function applyBrowserFileAction(change) {
     state.browserGeneration++;
     state.selectedPath = remapFileActionRelative(state.projectPath, state.selectedPath, change) || '';
     state.expandedPaths = new Set([...state.expandedPaths].map(rel => remapFileActionRelative(state.projectPath, rel, change)).filter(Boolean));
-    const tab = state.currentTab;
-    if (!tab) continue;
-    const next = remapFileActionPath(tab.filePath, change);
-    if (next === tab.filePath) continue;
-    if (!next) {
-      if (sessionId === currentPanelSessionId || tab.type === 'diff') destroyCurrentTab(state);
-      state.currentTab = null;
-      state.panelVisible = state.explorerVisible;
-    } else {
-      tab.filePath = next;
-      tab.label = basename(next);
-      if (tab.type === 'file') {
-        tab.preview = { ...tab.preview, filePath: next };
-        if (sessionId === currentPanelSessionId) {
-          const result = await fpViewerPanel.relocate(tab.label, next);
-          if (state.currentTab === tab && fpViewerPanel.filePath === next) {
-            tab.content = fpViewerPanel.getContent();
-            if (result?.ok) tab.preview = { ...result, previewType: fpViewerPanel.previewType };
-          }
-        } else {
-          // Refresh asset URLs for a background HTML/media preview too.
-          let result;
-          try { result = await window.api.readFileForPanel(next); } catch {}
-          if (state.currentTab === tab && tab.filePath === next && result?.ok) tab.preview = result;
-        }
-      } else if (sessionId === currentPanelSessionId) {
-        renderDiffContent(sessionId, tab);
+
+    for (const tab of [...(state.editors?.tabs || [])]) {
+      const next = remapFileActionPath(tab.path, change);
+      if (next === tab.path) continue;
+      // To the Trash: the tab goes, and its unsaved edits with it, as the question said.
+      if (!next) { state.editors.remove(tab, { discard: true }); continue; }
+      if (state.currentTab?.type === 'file' && state.currentTab.filePath === tab.path) {
+        state.currentTab = { type: 'file', filePath: next };
       }
+      tab.pending = null;
+      await state.editors.relocate(tab, next);
+    }
+
+    const diff = state.currentTab;
+    if (diff?.type !== 'diff') continue;
+    const next = remapFileActionPath(diff.filePath, change);
+    if (next === diff.filePath) continue;
+    if (!next) {
+      leaveDiffTab(sessionId, state);
+    } else {
+      diff.filePath = next;
+      diff.label = basename(next);
+      if (sessionId === currentPanelSessionId) renderDiffContent(sessionId, diff);
     }
   }
   if (currentPanelSessionId) {

@@ -10,8 +10,6 @@ const navSource = grid.slice(grid.indexOf('// The session rows in the order the 
 const terminal = read('terminal-manager.js');
 const keysStart = terminal.indexOf('function setupTerminalKeyBindings');
 const keysSource = terminal.slice(keysStart, terminal.indexOf('\n}\n', keysStart) + 3);
-const panel = read('file-panel.js');
-const panelSource = panel.slice(panel.indexOf("// Every session's file tab shares fpViewerPanel"), panel.indexOf('async function openFileInPanel'));
 
 const rows = ids => ({ querySelectorAll: () => ids.map(sessionId => ({ dataset: { sessionId } })) });
 
@@ -100,63 +98,4 @@ test('off the Mac, Ctrl+Left/Right is left to xterm as a word jump', () => {
   assert.equal(event._handled, true, 'the document handler does not switch sessions either');
   assert.deepEqual(sent, []);
   assert.deepEqual(shown, []);
-});
-
-/** The file panel's shared viewer, with a stand-in editor the test can type into. */
-function panelContext() {
-  const view = text => {
-    const v = { text, head: 0 };
-    Object.defineProperty(v, 'state', { get: () => ({ doc: { toString: () => v.text, length: v.text.length }, selection: { main: { head: v.head } } }) });
-    v.dispatch = ({ selection }) => { if (selection) v.head = selection.anchor; };
-    return v;
-  };
-  const viewer = {
-    filePath: '', editorView: null, opened: 0, destroyed: 0,
-    open(_label, filePath, content) { this.opened++; this.filePath = filePath; this.editorView = view(content); },
-    getContent() { return this.editorView ? this.editorView.state.doc.toString() : ''; },
-    destroy() { this.destroyed++; this.filePath = ''; this.editorView = null; },
-  };
-  const context = vm.createContext({ fpViewerPanel: viewer });
-  vm.runInContext(panelSource, context);
-  return { context, viewer };
-}
-
-const fileTab = (filePath, content) => ({ type: 'file', label: filePath, filePath, content, preview: {} });
-
-test('unsaved edits and the cursor survive switching to another session and back', () => {
-  const { context, viewer } = panelContext();
-  const a = fileTab('/a.md', 'hello');
-  const b = fileTab('/b.md', 'other');
-  context.showFileTab(a);
-  viewer.editorView.text = 'hello, typed';
-  viewer.editorView.head = 12;
-
-  context.showFileTab(b);
-  context.showFileTab(a);
-  assert.equal(viewer.getContent(), 'hello, typed');
-  assert.equal(viewer.editorView.head, 12);
-});
-
-test('repainting the shown file does not reload it', () => {
-  const { context, viewer } = panelContext();
-  const a = fileTab('/a.md', 'hello');
-  context.showFileTab(a);
-  viewer.editorView.text = 'typed';
-  context.showFileTab(a);
-  assert.equal(viewer.opened, 1);
-  assert.equal(viewer.getContent(), 'typed');
-});
-
-test('replacing a background session\'s file leaves the shown file alone', () => {
-  const { context, viewer } = panelContext();
-  const a = fileTab('/a.md', 'hello');
-  const b = fileTab('/b.md', 'other');
-  context.showFileTab(a);
-  context.showFileTab(b);
-  context.destroyCurrentTab({ currentTab: a });
-  assert.equal(viewer.destroyed, 0);
-  assert.equal(viewer.filePath, '/b.md');
-
-  context.destroyCurrentTab({ currentTab: b });
-  assert.equal(viewer.destroyed, 1, 'the shown file is torn down with its tab');
 });

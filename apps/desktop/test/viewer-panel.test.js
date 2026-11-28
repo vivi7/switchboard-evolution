@@ -481,3 +481,169 @@ test('the editor\'s keys work from the toolbar: F3, Ctrl+G, Cmd+Shift+O go to th
   }
   assert.deepEqual(ran, ['F3', 'g', 'O']);
 });
+
+/** The drafts of main (file-drafts.js) as preload.js gives them to a window. */
+function draftApi(drafts = new Map()) {
+  return {
+    drafts,
+    getDraft: filePath => drafts.get(filePath) || null,
+    setDraft: (filePath, draft) => { drafts.set(filePath, { ...draft }); return { ok: true }; },
+    removeDraft: filePath => drafts.delete(filePath),
+  };
+}
+
+/** A viewer with drafts, and a way to type in it. */
+function draftSetup(drafts, options) {
+  const made = setup(options);
+  const { drafts: kept, ...methods } = draftApi(drafts);
+  Object.assign(made.api, methods);
+  const type = (text, panel = made.panel) => panel.editorView.dispatch({ changes: { from: 0, to: panel.editorView.state.doc.length, insert: text } });
+  return { ...made, drafts: kept, type };
+}
+
+test('what is typed goes into the draft after a pause, and comes back after a restart', async () => {
+  const first = draftSetup();
+  first.panel.open('Code', '/app.js', 'saved');
+  first.type('typed');
+  assert.equal(first.drafts.size, 0, 'not on every key');
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert.deepEqual(first.drafts.get('/app.js'), { content: 'typed', base: 'saved' });
+
+  const second = draftSetup(first.drafts);
+  second.panel.open('Code', '/app.js', 'saved');
+  assert.equal(second.panel.getContent(), 'typed');
+  assert.equal(second.panel.isDirty(), true);
+  assert.equal(second.toolbar.dirty, true);
+});
+
+test('showing another file, or closing the viewer or the window, keeps what is typed', () => {
+  const { panel, drafts, type, context } = draftSetup();
+  panel.open('A', '/a.js', 'a');
+  type('a typed');
+  panel.open('B', '/b.js', 'b');
+  assert.equal(drafts.get('/a.js').content, 'a typed');
+  panel.open('A', '/a.js', 'a');
+  assert.equal(panel.getContent(), 'a typed');
+  type('a typed more');
+  panel.destroy();
+  assert.equal(drafts.get('/a.js').content, 'a typed more');
+
+  panel.open('B', '/b.js', 'b');
+  type('b typed');
+  let held = false;
+  context.window.dispatchEvent({ type: 'beforeunload', preventDefault: () => { held = true; } });
+  assert.equal(drafts.get('/b.js').content, 'b typed');
+  assert.equal(held, false);
+});
+
+test('a draft that cannot be written holds the window and says why', () => {
+  const { panel, api, type, context } = draftSetup();
+  api.setDraft = () => ({ ok: false, error: 'disk full' });
+  panel.open('A', '/a.js', 'a');
+  type('a typed');
+  let held = false;
+  context.window.dispatchEvent({ type: 'beforeunload', preventDefault: () => { held = true; } });
+  assert.equal(held, true);
+  assert.match(panel.noticeEl.textContent, /disk full/);
+});
+
+test('saving, undoing back to the file, and Don\'t Save drop the draft', async () => {
+  const { panel, api, drafts, type, writes } = draftSetup();
+  panel.open('A', '/a.js', 'a');
+  type('one');
+  panel._flushDraft();
+  await panel._save();
+  assert.deepEqual(writes, [['/a.js', 'one']]);
+  assert.equal(drafts.size, 0);
+
+  type('two');
+  panel._flushDraft();
+  type('one');
+  panel._flushDraft();
+  assert.equal(drafts.size, 0);
+
+  type('three');
+  panel._flushDraft();
+  api.confirmUnsavedChanges = async () => 'discard';
+  assert.equal(await panel.confirmLeave(), true);
+  assert.equal(drafts.size, 0);
+  panel.destroy();
+  assert.equal(drafts.size, 0, 'not written again on the way out');
+});
+
+test('text typed while a save is under way stays unsaved and kept', async () => {
+  let done;
+  const { panel, drafts, type } = draftSetup(undefined, { onSave: () => new Promise(resolve => { done = resolve; }) });
+  panel.open('A', '/a.js', 'a');
+  type('one');
+  const saving = panel._save();
+  type('one two');
+  done({ ok: true });
+  await saving;
+  assert.equal(panel.isDirty(), true);
+  assert.deepEqual(drafts.get('/a.js'), { content: 'one two', base: 'one' });
+});
+
+test('a draft of a file that changed since is shown with the question', () => {
+  const { panel } = draftSetup(new Map([['/a.js', { content: 'mine', base: 'old' }]]));
+  panel.open('A', '/a.js', 'new on disk');
+  assert.equal(panel.getContent(), 'mine');
+  assert.equal(panel.conflictEl.hidden, false);
+  panel._keepMine();
+  assert.equal(panel.conflictEl.hidden, true);
+});
+
+test('a file that is gone shows its draft, and Save writes it again', async () => {
+  const calls = [];
+  const { panel, drafts } = draftSetup(new Map([['/gone.js', { content: 'kept', base: 'was' }]]), {
+    onSave: async (...args) => { calls.push(args); return { ok: true }; },
+  });
+  panel.open('Gone', '/gone.js', 'was', { missing: true });
+  assert.equal(panel.getContent(), 'kept');
+  assert.equal(panel.isDirty(), true);
+  assert.match(panel.noticeEl.textContent, /no longer on disk/);
+  await panel._save();
+  assert.equal(JSON.stringify(calls), JSON.stringify([['/gone.js', 'kept', { create: true }]]));
+  assert.equal(drafts.size, 0);
+  assert.equal(panel.isDirty(), false);
+  assert.equal(panel.noticeEl.hidden, true);
+});
+
+test('two viewers of one file show the same unsaved text', async () => {
+  const { panel, drafts, type, context } = draftSetup();
+  const other = new context.window.ViewerPanel(context.document.createElement(), { language: 'auto', onSave: async () => ({ ok: true }) });
+  context.window.cmSetText = (view, text) => { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } }); return true; };
+  // The harness gives every viewer the same toolbar.
+  panel.open('A', '/a.js', 'a');
+  other.open('A', '/a.js', 'a');
+  type('typed here');
+  panel._flushDraft();
+  assert.equal(other.getContent(), 'typed here');
+  assert.equal(other.isDirty(), true);
+  await other._save();
+  assert.equal(panel.isDirty(), false);
+  assert.equal(drafts.size, 0);
+});
+
+test('a renamed file keeps its unsaved text as unsaved', async () => {
+  const { panel, api, drafts, type } = draftSetup();
+  api.readFileForPanel = async () => ({ ok: true, content: 'a' });
+  panel.open('A', '/a.js', 'a');
+  type('typed');
+  panel._flushDraft();
+  // As main moves the draft along with the file.
+  drafts.set('/b.js', drafts.get('/a.js'));
+  drafts.delete('/a.js');
+  await panel.relocate('B', '/b.js');
+  assert.equal(panel.isDirty(), true);
+  assert.deepEqual(drafts.get('/b.js'), { content: 'typed', base: 'a' });
+});
+
+test('a file moved to the Trash takes its draft with it', () => {
+  const { panel, drafts, type } = draftSetup();
+  panel.open('A', '/a.js', 'a');
+  type('typed');
+  panel._flushDraft();
+  panel.dispose({ discard: true });
+  assert.equal(drafts.size, 0);
+});

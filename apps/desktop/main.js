@@ -92,6 +92,7 @@ const { listProjectDirectory, readProjectFile, readPreviewFile, openFileExternal
 const openedFiles = require('./opened-files');
 const { manageProjectEntry, trashProjectEntries, revealFile, shareFile, createProjectEntry, duplicateProjectEntry, pasteProjectEntry } = require('./file-management');
 const FileSelection = require('./public/file-selection');
+const { createDraftStore } = require('./file-drafts');
 const fileTimeline = require('./file-timeline');
 const projectSearch = require('./project-search');
 const { readPlans, linkPlans, projectResolver } = require('./plans-source');
@@ -1168,6 +1169,7 @@ ipcMain.handle('manage-project-entry', async (_event, projectPath, relativePath,
         return choice.response === 1;
       },
     });
+    drafts.follow(result);
     return { ok: true, ...result };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -1194,6 +1196,7 @@ ipcMain.handle('trash-project-entries', async (event, projectPath, relativePaths
         return choice.response === 1;
       },
     });
+    drafts.follow(result);
     return { ok: true, ...result };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -1210,7 +1213,11 @@ const explorerAction = (fn) => async (_event, ...args) => {
 };
 ipcMain.handle('create-project-entry', explorerAction((projectPath, folderRelative, name, kind) => createProjectEntry(projectPath, folderRelative, name, kind)));
 ipcMain.handle('duplicate-project-entry', explorerAction((projectPath, relativePath) => duplicateProjectEntry(projectPath, relativePath)));
-ipcMain.handle('paste-project-entry', explorerAction((sourcePath, sourceRelative, targetPath, targetRelative, mode) => pasteProjectEntry(sourcePath, sourceRelative, targetPath, targetRelative, mode)));
+ipcMain.handle('paste-project-entry', explorerAction((sourcePath, sourceRelative, targetPath, targetRelative, mode) => {
+  const result = pasteProjectEntry(sourcePath, sourceRelative, targetPath, targetRelative, mode);
+  drafts.follow(result);
+  return result;
+}));
 ipcMain.handle('get-file-timeline', explorerAction((projectPath, relativePath) => fileTimeline.getFileTimeline(projectPath, relativePath)));
 ipcMain.handle('get-file-timeline-diff', explorerAction((projectPath, relativePath, hash, repoPath, oldPath) => fileTimeline.getFileTimelineDiff(projectPath, relativePath, hash, repoPath, oldPath)));
 ipcMain.handle('get-file-at-commit', explorerAction((projectPath, relativePath, hash, repoPath) => fileTimeline.getFileAtCommit(projectPath, relativePath, hash, repoPath)));
@@ -1254,15 +1261,77 @@ ipcMain.handle('read-project-file', async (_event, projectPath, relativePath) =>
   }
 });
 
-ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
+ipcMain.handle('save-file-for-panel', async (_event, filePath, content, options) => {
   try {
     const resolved = path.resolve(filePath);
-    if (!fs.existsSync(resolved)) return { ok: false, error: 'File does not exist' };
+    // `create`: unsaved text kept for a file that is gone is written back, into a folder still there.
+    if (!fs.existsSync(resolved) && !(options?.create === true && fs.existsSync(path.dirname(resolved)))) {
+      return { ok: false, error: 'File does not exist' };
+    }
     fs.writeFileSync(resolved, content, 'utf8');
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
   }
+});
+
+// ── Unsaved edits (file-drafts.js) ───────────────────────────────────
+// What an editor holds and has not saved is written here as it is typed, so
+// closing a view, a window or the app loses nothing. Synchronous: a window
+// that closes writes its last keys before it goes. Every other window with the
+// same file open follows, so one file has one unsaved text.
+const drafts = createDraftStore({ dir: path.join(dbModule.DATA_DIR, 'drafts') });
+
+function tellOtherWindows(sender, change) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed() && win.webContents !== sender) win.webContents.send('draft-changed', change);
+  }
+}
+
+ipcMain.on('draft-get', (event, filePath) => { event.returnValue = drafts.get(filePath); });
+
+ipcMain.on('draft-set', (event, filePath, draft) => {
+  const result = drafts.set(filePath, draft);
+  if (result.ok) tellOtherWindows(event.sender, { filePath, state: 'dirty', content: draft.content, base: draft.base });
+  else log.warn(`[drafts] could not keep unsaved changes: ${result.error}`);
+  event.returnValue = result;
+});
+
+// `change.content` is the text the file has now: saved, or the edits dropped.
+ipcMain.on('draft-remove', (event, filePath, change) => {
+  drafts.remove(filePath);
+  tellOtherWindows(event.sender, { filePath, state: 'clean', content: change?.content });
+  event.returnValue = true;
+});
+
+ipcMain.handle('list-drafts', () => drafts.list());
+
+// A window whose unsaved text could not be kept (viewer-panel.js stops its
+// unload): asked before it is lost.
+let discardUnkeptDrafts = false;
+
+function confirmLosingDrafts(win) {
+  const options = {
+    type: 'warning',
+    message: 'Your unsaved changes could not be kept',
+    detail: 'Switchboard could not write a copy of them. Keep it open and save the files, or they are lost.',
+    buttons: ['Keep Open', 'Close Anyway'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  };
+  const response = win && !win.isDestroyed() ? dialog.showMessageBoxSync(win, options) : dialog.showMessageBoxSync(options);
+  return response === 1;
+}
+
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('will-prevent-unload', (event) => {
+    // A web page shown inside the app keeps its own question.
+    if (contents.getType() !== 'window') return;
+    // preventDefault here lets the window go, against the page's wish to stay.
+    if (discardUnkeptDrafts || confirmLosingDrafts(BrowserWindow.fromWebContents(contents))) event.preventDefault();
+    else appIsQuitting = false;
+  });
 });
 
 // An editor with unsaved changes is about to show another file or close:
@@ -1286,10 +1355,15 @@ ipcMain.handle('confirm-unsaved-changes', async (event, fileName) => {
 
 // ── File Watching (for viewer panels) ────────────────────────────────
 const fileWatchers = new Map(); // filePath → FSWatcher
+// How many editors watch each: one closing a file leaves it watched for the others.
+const fileWatcherUsers = new Map();
 
 ipcMain.handle('watch-file', (_event, filePath) => {
   const resolved = path.resolve(filePath);
-  if (fileWatchers.has(resolved)) return { ok: true };
+  if (fileWatchers.has(resolved)) {
+    fileWatcherUsers.set(resolved, (fileWatcherUsers.get(resolved) || 1) + 1);
+    return { ok: true };
+  }
   try {
     let debounce = null;
     const watcher = fs.watch(resolved, (eventType) => {
@@ -1308,8 +1382,14 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
   const resolved = path.resolve(filePath);
   const watcher = fileWatchers.get(resolved);
   if (watcher) {
-    watcher.close();
-    fileWatchers.delete(resolved);
+    const users = (fileWatcherUsers.get(resolved) || 1) - 1;
+    if (users > 0) {
+      fileWatcherUsers.set(resolved, users);
+    } else {
+      watcher.close();
+      fileWatchers.delete(resolved);
+      fileWatcherUsers.delete(resolved);
+    }
   }
   return { ok: true };
 });
@@ -4356,7 +4436,16 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  // Unsaved text that could not be kept is asked about before anything is shut down.
+  if (!discardUnkeptDrafts && drafts.failed().length) {
+    if (!confirmLosingDrafts(mainWindow)) {
+      event.preventDefault();
+      appIsQuitting = false;
+      return;
+    }
+    discardUnkeptDrafts = true;
+  }
   // The renderer persists raw-terminal descriptors and scrollback during its
   // unload. Do not report the shutdown kills as user-initiated terminal exits,
   // or that renderer cleanup would delete the descriptors before restart.
