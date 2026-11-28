@@ -20,7 +20,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 const git = require('./git');
+const projectIcons = require('./project-icons');
 const { ENV_FILE_NAME, ENV_FILE_TEMPLATE } = require('./public/env-files-model');
 const gitGraphService = require('./git-graph-service');
 const pullRequests = require('./pull-requests');
@@ -60,6 +62,8 @@ function init(ctx) {
   plansDir = ctx.plansDir || path.join(os.homedir(), '.claude', 'plans');
   // Project templates; tests point this at a temp folder or the bundled one.
   templatesDir = ctx.templatesDir || null;
+  // The projects' pictures (project-icons.js); tests point this at a temp folder.
+  iconsDir = ctx.iconsDir || null;
 }
 
 // --- Root and slugs ---
@@ -283,9 +287,14 @@ const BUNDLED_TEMPLATES_DIR = path.join(__dirname, 'templates');
 const TEMPLATE_META = 'template.json';
 const TEMPLATE_KIND_RE = /^[a-z0-9][a-z0-9-]*$/;
 let templatesDir = null;
+let iconsDir = null;
 
 function dataDir() {
   return process.env.SWITCHBOARD_DATA_DIR ? path.resolve(process.env.SWITCHBOARD_DATA_DIR) : path.join(os.homedir(), '.switchboard');
+}
+
+function projectIconsDir() {
+  return iconsDir || path.join(dataDir(), 'project-icons');
 }
 
 function templatesRoot() {
@@ -855,8 +864,13 @@ function scheduleNode(row) {
 
 function projectNode(row, folderRows = [], trackRows = [], scheduleRows = []) {
   const added = addedFilesAtRoot(row.root);
+  const iconFile = projectIcons.findIcon(projectIconsDir(), row.id, row.icon);
   return {
     id: row.id, name: row.name, slug: row.slug, root: row.root,
+    // The version of its picture, which a phone asks for with get-project-icon,
+    // and the file the window shows. Both null: the square shows the initials.
+    icon: iconFile ? row.icon : null,
+    iconUrl: iconFile ? pathToFileURL(iconFile).href : null,
     status: row.status || 'active',
     sharedBranch: row.sharedBranch === undefined ? true : !!row.sharedBranch,
     branchName: row.branchName || null,
@@ -1036,12 +1050,54 @@ function normalizeSnooze(row, value, status) {
   return { snoozedUntil: iso, snoozedAt: sameWake ? row.snoozedAt : new Date().toISOString() };
 }
 
-/** Rows only. The folder on disk and every session stay. */
+/**
+ * The project's picture: a base64 PNG the window made (public/project-icon.js),
+ * or null to show the initials again. Like a star, it is not work on the
+ * project: the modified time stays.
+ */
+function setProjectIcon(id, png) {
+  const row = db.getProject(id);
+  if (!row) return { error: 'Project not found' };
+  let version = null;
+  if (png !== null) {
+    const decoded = projectIcons.decodeIcon(png);
+    if (decoded.error) return { error: decoded.error };
+    try {
+      version = projectIcons.writeIcon(projectIconsDir(), id, decoded.bytes);
+    } catch (err) {
+      return { error: `Could not save the icon: ${err.message}` };
+    }
+  }
+  db.updateProject(id, { icon: version });
+  try {
+    projectIcons.removeIcons(projectIconsDir(), id, version);
+  } catch (err) {
+    log.error?.('[projects] could not remove an old icon', err);
+  }
+  notifyRendererProjectsChanged();
+  return { ok: true, project: loadProjectNode(id) };
+}
+
+/** The picture as a data: URL, for a phone, which cannot read the file. */
+function projectIcon(id) {
+  const row = db.getProject(id);
+  if (!row) return { error: 'Project not found' };
+  const file = projectIcons.findIcon(projectIconsDir(), id, row.icon);
+  if (!file) return { ok: true, icon: null, dataUrl: null };
+  return { ok: true, icon: row.icon, dataUrl: `data:image/png;base64,${fs.readFileSync(file).toString('base64')}` };
+}
+
+/** Rows and its picture only. The folder on disk and every session stay. */
 function deleteProject(id) {
   const row = db.getProject(id);
   if (!row) return { error: 'Project not found' };
   const folders = db.listProjectFolders(id);
   db.deleteProject(id);
+  try {
+    projectIcons.removeIcons(projectIconsDir(), id);
+  } catch (err) {
+    log.error?.('[projects] could not remove the icon', err);
+  }
   log.info?.(`[projects] removed "${row.name}" (folder kept at ${row.root})`);
   for (const folder of folders) folderChanged(id, folder, 'detached');
   projectDeleted(id, row.root);
@@ -2431,7 +2487,7 @@ async function saveProjectActionsLog(projectId, folderPath, opts) {
 module.exports = {
   init,
   projectsRoot, slugify, uniqueSlug, defaultBrief, managedBlock, addBriefSection, onFolderChange, onProjectCreated, onProjectDeleted,
-  createProject, updateProject, setStarredOrder, deleteProject, attachFolder, detachFolder, requireAttachedFolder,
+  createProject, updateProject, setStarredOrder, setProjectIcon, projectIcon, deleteProject, attachFolder, detachFolder, requireAttachedFolder,
   folderGitStatus, folderGitInfo, projectGitInfo, projectGitDiff, stageProjectGitFiles, stageProjectGitLines, discardProjectGitFiles, ignoreProjectGitPaths, readProjectGitEditFile, saveProjectGitEditFile,
   projectGitGraph, projectGitGraphCommitDetail, projectGitGraphCompareDetail,
   projectGitGraphFileAtRevision, projectGitGraphFileDiffBetween,

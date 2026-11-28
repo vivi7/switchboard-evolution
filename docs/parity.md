@@ -50,7 +50,8 @@ The desktop app is a copy of the `master` branch of the Switchboard fork (upstre
 - [ ] A "New project" button at the top of the list opens the New project dialog — `projects-view.js` (`#proj-new-btn`, `showNewProjectDialog`)
 - [ ] Projects are listed under "Starred" (the starred projects at work, in the order they are dragged into; one starred since comes after them, newest first), then "Active", then a collapsible "Snoozed · n" shelf (ordered by wake time), then a collapsible "Done · n"; on the two shelves the starred ones come first — `projects-view.js` (`renderProjectList`, `projectListGroups`, `#proj-sec-starred`, `#proj-sec-snoozed`, `#proj-sec-done`)
 - [ ] Dragging a row of the Starred section, outside a search, puts it before or after another one (a line shows where); the order is kept in `projects.starRank`, and starring again puts a project at the end — `projects-view.js` (`markOrderRow`, `bindOrderDrag`, `setStarredOrder`), `pinned-order.js`, `projects.js` (`setStarredOrder`), `main.js` (`set-starred-order`)
-- [ ] Each project row shows a coloured initials mark, its name with a star after it (dim until the row is under the pointer, gold when starred; a click stars or unstars it, kept in `projects.starred`), a state dot (needs you, working, finished and not read, open, back from snooze), a running-task indicator and a running-session count — `projects-view.js` (`buildProjectRow`, `projectStarHtml`, `toggleProjectStar`, `projectDotState`, `updateProjectTaskIndicator`)
+- [ ] Each project row shows the project's mark (its picture, else coloured initials), its name with a star after it (dim until the row is under the pointer, gold when starred; a click stars or unstars it, kept in `projects.starred`), a state dot (needs you, working, finished and not read, open, back from snooze), a running-task indicator and a running-session count — `projects-view.js` (`buildProjectRow`, `projectStarHtml`, `toggleProjectStar`, `projectDotState`, `updateProjectTaskIndicator`)
+- [ ] (master) A click on a project row's mark opens the system's file dialog and makes the chosen PNG, JPG or SVG the project's picture, without opening the project; under the pointer a camera shows in the mark's bottom right corner — `projects-view.js` (`markButtonHtml`, `bindProjectList`, `chooseProjectIcon`), `style.css` (`.proj-mark-btn`, `.proj-mark-camera`)
 - [ ] Each row's second line shows the numbers for plan (done/total), todos (open/total), tracks and sessions (master) — `projects-view.js` (`projectRowStats`, `projectSublineHtml`)
 - [ ] Clicking a row opens the project page on its remembered tab — `projects-view.js` (`selectProject`)
 - [ ] The chevron before a row opens a drawer under it with the project's sessions, and the drawer stays open across window reloads (master) — `projects-view.js` (`toggleProjectDrawer`, `buildProjectDrawer`, `projectsUi.expandedProjects`)
@@ -288,6 +289,7 @@ Upstream `main` has the read-only graph. Everything that changes a repository is
 ## 11. Project page: Settings tab
 
 - [ ] Name is editable and saves on Enter or blur with a short "Saved" mark — `projects-view.js` (`renderSettings`, `#ws-set-name`, `flashSaved`)
+- [ ] (master) Icon: "Choose image…" takes a PNG, JPG or SVG, resizes it to 256 × 256 (cropped at the centre when not square) and shows it in the project's square instead of the initials, in the list, the project page, its windows and on the phone; "Change image…" replaces it and "Remove" shows the initials again; removing the project removes the picture — `projects-view.js` (`chooseProjectIcon`, `saveProjectIcon`, `markHtml`), `project-icon.js`, `project-icons.js`, `projects.js` (`setProjectIcon`, `projectIcon`), `main.js` (`set-project-icon`, `get-project-icon`)
 - [ ] "Project folder" shows the path and opens it; "Sessions start in" picks the default start folder — `projects-view.js` (`#ws-set-open`, `buildCwdField`)
 - [ ] Folders list with mode text, Open and Detach per folder, and "Attach folder…" — `projects-view.js` (`#ws-set-folders`, `#ws-set-attach`)
 - [ ] Worktree branch name and the "Same in every repo" switch save at once — `projects-view.js` (`#ws-set-branch`, `#ws-set-shared`)
@@ -492,12 +494,12 @@ Upstream `main` has the read-only graph. Everything that changes a repository is
 
 ## Renderer to main: ipcMain handlers in `apps/desktop/main.js`
 
-There are **276** handlers: 268 `ipcMain.handle` and 8 `ipcMain.on`. Upstream `main` has 98 of them; **178 are master only** (4 came with 1.6.6: staging, search and replace). A handler marked (master) is one of those. All of them are registered through `ipc-registry.js`, which lets the remote-access server call the same function with a null event. Events from main to the renderer are listed after the table.
+There are **279** handlers: 271 `ipcMain.handle` and 8 `ipcMain.on`. Upstream `main` has 98 of them; **181 are master only** (4 came with 1.6.6: staging, search and replace). A handler marked (master) is one of those. All of them are registered through `ipc-registry.js`, which lets the remote-access server call the same function with a null event. Events from main to the renderer are listed after the table.
 
 | Area | Count | Channels |
 |---|---|---|
 | Folders and legacy list | 4 | `browse-folder`, `add-project`, `remove-project`, `get-projects` |
-| Projects, tracks, templates | 14 (2 master) | `get-project-tree`, `create-project`, `update-project`, `delete-project`, `attach-project-folder`, `detach-project-folder`, `set-session-assignment`, `create-track`, `update-track`, `delete-track`, `get-projects-root`, `list-templates`; (master) `set-starred-order`, `get-project-disk-usage` |
+| Projects, tracks, templates | 17 (5 master) | `get-project-tree`, `create-project`, `update-project`, `delete-project`, `attach-project-folder`, `detach-project-folder`, `set-session-assignment`, `create-track`, `update-track`, `delete-track`, `get-projects-root`, `list-templates`; (master) `set-starred-order`, `get-project-disk-usage`, `set-project-icon`, `get-project-icon`, `import-project-icon` |
 | Env (master) | 3 | `project-env-files`, `create-project-env-file`, `exclude-project-env-file` |
 | Brief, plan, todos, added files | 10 | `save-project-brief`, `create-project-file`, `add-project-files`, `list-recent-project-files`, `get-project-plan`, `set-plan-item`, `append-plan-item`, `edit-plan-item`, `adopt-plan`, `list-env-files` |
 | Schedules | 6 | `list-schedules`, `create-schedule`, `update-schedule`, `delete-schedule`, `resolve-schedule-launch`, `get-schedule-context` |
@@ -542,6 +544,7 @@ Remote access is a whitelist: **196 methods** (93 in `remote-api.js`, 21 in `rem
 | `list-pending-diffs`, `mcp-diff-response` (local) | IDE emulation diffs answered from a phone (section 20) |
 | `attach-terminal`, `detach-terminal`, `fit-terminal`, `unfit-terminal` (local), `terminal-input` | Terminal output and input on a phone (sections 14, 21) |
 | `get-project-tree`, `get-projects-root`, `list-templates`, `create-project`, `update-project`, `delete-project`, `create-track`, `update-track`, `delete-track`, `attach-project-folder`, `detach-project-folder` | Projects list, New project, header, Settings tab, Overview tracks (sections 2, 3, 4, 11) |
+| `get-project-icon`, `import-project-icon` (a name and the bytes of a PNG, JPG or SVG, which the computer makes into the icon in a hidden window, `project-icon-render.js`; `set-project-icon` is the window's only) | A project's picture in the Projects list, and a tap on it to change it (section 2) |
 | `list-folders`, `create-folder` (local) | A folder picker for new projects and attaching, with a New Folder button (sections 3, 21) |
 | `get-project-plan`, `set-plan-item` (local), `edit-plan-item` (local), `append-plan-item`, `create-project-file`, `save-project-brief` | Plan and Todos tabs and the Plan and Todos cards (sections 4, 6) |
 | `project-env-files`, `create-project-env-file`, `exclude-project-env-file` (a folder of the project only, checked in `projects.js`); the file itself with `read-project-file` and `save-project-file` | Env tab (section 10e) |
@@ -595,6 +598,8 @@ The app opens on Sessions and has a bottom tab bar (Projects, Sessions, Stats, T
 
 ## `(tabs)/projects.tsx` (Projects)
 
+- [ ] A project with a picture shows it in its square instead of the initials — `components/projects/ListRows.tsx` (`ProjectMark`), `projects/queries.ts` (`useProjectIcon`)
+- [ ] A tap on a project's square opens the phone's file browser; the chosen PNG, JPG or SVG (8 MB at most) is sent to the computer, which makes it the project's picture (a long press there still shows the project's actions); only with a desktop that has `import-project-icon` — `components/projects/ListRows.tsx` (`ProjectMark`), `projects/icon.ts` (`chooseProjectIcon`)
 - [ ] Project list with Starred, Active, Snoozed and Done sections (a ★ after a starred project's name), "No project" folders, numbers on each row, drawers with sessions grouped by Time, Track or State (combo "Group each project's sessions by") — `(tabs)/projects.tsx`, `projects/list-ui.ts`, `projects/drawer.ts`
 - [ ] Search projects by name and sessions by content or title, with leave-out and Stop — `(tabs)/projects.tsx`
 - [ ] "New" creates a project from a name — `(tabs)/projects.tsx` (`TextPrompt`)

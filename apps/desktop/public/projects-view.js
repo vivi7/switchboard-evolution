@@ -274,6 +274,7 @@ function fileManagerName() {
 
 const PICONS = {
   refresh: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-2L20 8M4 16l2.3 3A7 7 0 0 0 17.9 17"/></svg>`,
+  camera: (s = 12) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>`,
   plus: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`,
   chevronDown: (s = 11) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
   chevronRight: (s = 11) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>`,
@@ -565,10 +566,23 @@ function projectInitials(name) {
   return (words[0][0] + words[1][0]).toUpperCase();
 }
 
+/** The project's square: its own picture, else its initials on its own colour. */
 function markHtml(project, size = 28, extraClass = '') {
+  // Not draggable: a drag on the row moves the project, not its picture.
+  if (project.iconUrl) {
+    return `<span class="proj-mark proj-mark--icon ${extraClass}" style="width:${size}px;height:${size}px;"><img src="${escapeAttr(project.iconUrl)}" alt="" draggable="false"></span>`;
+  }
   const h = projectHue(project.id);
   const fontSize = Math.round(size * 0.4);
   return `<span class="proj-mark ${extraClass}" style="width:${size}px;height:${size}px;font-size:${fontSize}px;background:hsla(${h},70%,60%,0.18);color:hsl(${h},80%,72%);">${escapeHtml(projectInitials(project.name))}</span>`;
+}
+
+/**
+ * The sidebar's square, as a button: a click picks the project's picture, and
+ * a camera shows in its corner under the pointer.
+ */
+function markButtonHtml(project, size = 28) {
+  return `<button type="button" class="proj-mark-btn" title="Change the project's icon" aria-label="Change the icon of ${escapeAttr(project.name)}">${markHtml(project, size)}<span class="proj-mark-camera" aria-hidden="true">${PICONS.camera(10)}</span></button>`;
 }
 
 /**
@@ -1078,7 +1092,7 @@ function buildProjectRow(project) {
   // Only the chevron opens the drawer; the rest of the row opens the project.
   const toggleLabel = expanded ? 'Hide sessions' : 'Show sessions';
   row.innerHTML = `<button type="button" class="proj-expand" aria-expanded="${expanded}" aria-controls="proj-drawer-${escapeHtml(project.id)}" aria-label="${toggleLabel}" title="${toggleLabel}">${PICONS.chevronRight(11)}</button>` +
-    markHtml(project, 28) +
+    markButtonHtml(project, 28) +
     `<span class="proj-text"><span class="proj-name-line"><span class="proj-name">${escapeHtml(project.name)}</span>${projectStarHtml(project)}</span><span class="proj-sub" aria-label="${escapeHtml(projectSubline(project))}">${projectSublineHtml(project)}</span></span>` +
     // At the right, the + for a new session, and under it the sessions at
     // work with their dot; the + is centred when there is nothing under it.
@@ -1279,6 +1293,8 @@ function bindProjectList() {
     row.oncontextmenu = (e) => { e.preventDefault(); showContextMenu(projectMenuItems(project), { x: e.clientX, y: e.clientY }); };
     const toggle = row.querySelector('.proj-expand');
     if (toggle) toggle.onclick = (e) => { e.stopPropagation(); toggleProjectDrawer(project.id); };
+    const mark = row.querySelector('.proj-mark-btn');
+    if (mark) mark.onclick = (e) => { e.stopPropagation(); chooseProjectIcon(findTreeProject(project.id) || project); };
     const star = row.querySelector('.proj-star');
     if (star) star.onclick = (e) => { e.stopPropagation(); toggleProjectStar(project); };
     const plus = row.querySelector('.proj-new');
@@ -3085,6 +3101,27 @@ function renderSideCards(project, side) {
 
 // --- Settings tab ---
 
+/** A picked image, made into the project's picture (project-icon.js). */
+async function chooseProjectIcon(project) {
+  const file = await pickProjectIconFile();
+  if (!file) return;
+  let png;
+  try { png = await makeProjectIcon(file); } catch (err) { alert(err.message); return; }
+  await saveProjectIcon(project, png);
+}
+
+/** Keep the picture, or with null go back to the initials, and draw the page again. */
+async function saveProjectIcon(project, png) {
+  const result = await window.api.setProjectIcon(project.id, png);
+  if (result?.error) { alert(result.error); return; }
+  for (const copy of treeCopiesOf(project.id)) {
+    copy.icon = result.project.icon;
+    copy.iconUrl = result.project.iconUrl;
+  }
+  renderOverview();
+  loadProjects();
+}
+
 function renderSettings(project, body) {
   const shared = project.sharedBranch !== false;
   body.innerHTML = `
@@ -3094,6 +3131,14 @@ function renderSettings(project, body) {
         <div class="ws-row">
           <div class="ws-row-k"><b>Name</b></div>
           <div class="ws-row-v"><input type="text" class="ws-input" id="ws-set-name" value="${escapeHtml(project.name)}" spellcheck="false"><span class="ws-saved" id="ws-set-name-saved">${PICONS.check(11)}<span>Saved</span></span></div>
+        </div>
+        <div class="ws-row">
+          <div class="ws-row-k"><b>Icon</b><span>A PNG, JPG or SVG in place of the initials, cropped to a square.</span></div>
+          <div class="ws-row-v">
+            ${markHtml(project, 38, 'proj-mark--lg')}
+            <button type="button" class="ws-ghost ws-ghost--sm" id="ws-set-icon">${PICONS.plus(11)}<span>${project.iconUrl ? 'Change image…' : 'Choose image…'}</span></button>
+            ${project.iconUrl ? `<button type="button" class="ws-ghost ws-ghost--sm" id="ws-set-icon-remove" title="Show the initials again">${PICONS.x(11)}<span>Remove</span></button>` : ''}
+          </div>
         </div>
         <div class="ws-row">
           <div class="ws-row-k"><b>Project folder</b><span>The brief, plan and todos live here.</span></div>
@@ -3149,6 +3194,9 @@ function renderSettings(project, body) {
   nameInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); nameInput.blur(); } };
   nameInput.onblur = saveName;
   q('#ws-set-open').onclick = () => window.api.openPath(project.root);
+  q('#ws-set-icon').onclick = () => chooseProjectIcon(project);
+  const removeIcon = q('#ws-set-icon-remove');
+  if (removeIcon) removeIcon.onclick = () => saveProjectIcon(project, null);
 
   q('#ws-set-cwd').appendChild(buildCwdField(project, project.defaultCwd, `Project folder (${pathBasename(project.root)})`, [], async (defaultCwd) => {
     const result = await window.api.updateProject(project.id, { defaultCwd });

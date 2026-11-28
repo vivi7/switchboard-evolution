@@ -24,6 +24,8 @@ export type Project = {
   starred?: boolean;
   /** Its place in the Starred section (pinned-order.js); null until a drag, none from an older desktop. */
   starRank?: number | null;
+  /** The version of its picture (get-project-icon); null when it shows initials, none from an older desktop. */
+  icon?: string | null;
   /** The project folder's name, and the worktree branch when none is set. */
   slug?: string;
   /** One branch for every worktree of the project (branchName, else the slug), or each worktree names its own. */

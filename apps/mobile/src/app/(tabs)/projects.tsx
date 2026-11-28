@@ -19,6 +19,7 @@ import { SessionRow } from '@/components/SessionRow';
 import { Sheet } from '@/components/Sheet';
 import { TextPrompt } from '@/components/TextPrompt';
 import { GROUP_MODES, projectListRows, sessionEventTime, sessionsWithoutProject, type DrawerState, type ListRow } from '@/projects/drawer';
+import { chooseProjectIcon } from '@/projects/icon';
 import { pinnedGroup, STARRED, type OrderGroup } from '@/projects/order';
 import { saveOrder } from '@/projects/save-order';
 import { useListUi } from '@/projects/list-ui';
@@ -64,6 +65,7 @@ export default function ProjectsScreen() {
   // A desktop older than the order has no handles.
   const canOrderStarred = useCapability('set-starred-order');
   const canOrderPinned = useCapability('set-pinned-order');
+  const canSetIcon = useCapability('import-project-icon');
   const donateDue = useDonateBoxDue();
   const closeDonate = useDonate((s) => s.close);
 
@@ -167,6 +169,9 @@ export default function ProjectsScreen() {
             onOpen={openProject}
             onLongPress={setProjectActionsFor}
             onNewSession={() => newSession(`p:${item.project.id}`)}
+            onPickIcon={canSetIcon ? () => {
+              chooseProjectIcon(item.project.id).catch((err: Error) => Alert.alert('Could not change the icon', err.message));
+            } : undefined}
             onLeaveOut={searching ? () => leaveOut({ projectId: item.project.id }) : undefined}
             handle={ordered}
           />
@@ -313,7 +318,7 @@ export default function ProjectsScreen() {
 }
 
 /** A project row with what it needs read: its plan's numbers, its state and running sessions. */
-function ProjectRow({ project, open, now, onToggle, onOpen, onLongPress, onNewSession, onLeaveOut, handle }: {
+function ProjectRow({ project, open, now, onToggle, onOpen, onLongPress, onNewSession, onPickIcon, onLeaveOut, handle }: {
   project: Project;
   open: boolean;
   now: number;
@@ -321,6 +326,7 @@ function ProjectRow({ project, open, now, onToggle, onOpen, onLongPress, onNewSe
   onOpen: (project: Project) => void;
   onLongPress: (project: Project) => void;
   onNewSession: () => void;
+  onPickIcon?: () => void;
   onLeaveOut?: () => void;
   handle?: boolean;
 }) {
@@ -346,6 +352,7 @@ function ProjectRow({ project, open, now, onToggle, onOpen, onLongPress, onNewSe
       onOpen={() => onOpen(project)}
       onLongPress={() => onLongPress(project)}
       onNewSession={onNewSession}
+      onPickIcon={onPickIcon}
       onLeaveOut={onLeaveOut}
       handle={handle}
     />

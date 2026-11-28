@@ -49,7 +49,7 @@ function makeFakeDb({ global = {} } = {}) {
     updateProject: (id, patch) => {
       const row = rows.projects.find(r => r.id === id);
       if (!row) return 0;
-      for (const key of ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'snoozedUntil', 'snoozedAt', 'starred', 'starRank', 'modified']) {
+      for (const key of ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'snoozedUntil', 'snoozedAt', 'starred', 'starRank', 'icon', 'modified']) {
         if (key in patch) row[key] = key === 'sharedBranch' || key === 'starred' ? (patch[key] ? 1 : 0) : patch[key];
       }
       return 1;
@@ -103,6 +103,7 @@ function setup({ folders = [], global = {} } = {}) {
     log: { info() {}, error() {} },
     buildProjectsFromCache: () => folders,
     notifyRendererProjectsChanged: () => { notified++; },
+    iconsDir: path.join(root, '.project-icons'),
   });
   return { root, db, notifications: () => notified, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
@@ -420,6 +421,55 @@ test('buildProjectTree files by explicit id, then by cwd, and leaves the rest ou
     assert.equal(byName.A.sessionCount, 4);
     assert.equal(byName.A.lastActivity, '2026-09-03T00:00:00.000Z');
     assert.deepEqual(tree.projects.map(p => p.name), ['A', 'B'], 'most recent activity first');
+  } finally { t.cleanup(); }
+});
+
+test("a project's picture: set, sent to a phone, replaced, removed", async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Pictured' });
+    assert.equal(project.icon, null);
+    assert.equal(project.iconUrl, null);
+    // A PNG as far as it is checked: signature and a 256 × 256 IHDR.
+    const png = (filler) => {
+      const bytes = Buffer.alloc(33, filler);
+      Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').copy(bytes);
+      bytes.writeUInt32BE(256, 16);
+      bytes.writeUInt32BE(256, 20);
+      return bytes.toString('base64');
+    };
+    const dir = path.join(t.root, '.project-icons');
+
+    const before = t.notifications();
+    const set = projects.setProjectIcon(project.id, png(1)).project;
+    assert.match(set.icon, /^[0-9a-f]{16}$/);
+    assert.match(set.iconUrl, /^file:.*\.png$/);
+    assert.equal(set.modified, project.modified, 'a picture is not work on the project');
+    assert.equal(t.notifications(), before + 1);
+    assert.deepEqual(projects.projectIcon(project.id), { ok: true, icon: set.icon, dataUrl: `data:image/png;base64,${png(1)}` });
+
+    const replaced = projects.setProjectIcon(project.id, png(2)).project;
+    assert.notEqual(replaced.icon, set.icon);
+    assert.deepEqual(fs.readdirSync(dir), [`${project.id}-${replaced.icon}.png`]);
+
+    assert.match(projects.setProjectIcon(project.id, 'bm90IGEgcG5n').error, /256 × 256 PNG/);
+    assert.match(projects.setProjectIcon(project.id, undefined).error, /icon/);
+    assert.equal(projects.updateProject(project.id, { icon: 'x' }).project.icon, replaced.icon, 'only setProjectIcon changes it');
+    assert.equal(projects.setProjectIcon('nope', png(1)).error, 'Project not found');
+    assert.equal(projects.projectIcon('nope').error, 'Project not found');
+
+    const removed = projects.setProjectIcon(project.id, null).project;
+    assert.equal(removed.icon, null);
+    assert.deepEqual(fs.readdirSync(dir), []);
+    assert.deepEqual(projects.projectIcon(project.id), { ok: true, icon: null, dataUrl: null });
+
+    projects.setProjectIcon(project.id, png(3));
+    fs.rmSync(dir, { recursive: true, force: true });
+    assert.equal(projects.buildProjectTree(false).projects[0].icon, null, 'a lost file leaves the initials');
+
+    projects.setProjectIcon(project.id, png(3));
+    projects.deleteProject(project.id);
+    assert.deepEqual(fs.readdirSync(dir), [], 'removing the project removes its picture');
   } finally { t.cleanup(); }
 });
 

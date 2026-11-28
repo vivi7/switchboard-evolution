@@ -132,6 +132,7 @@ What "an app of its own" means:
 
 - Each project has a drawer with its sessions, grouped by time, track or state. A **Session** tab holds a terminal, a transcript or a task log under the project header.
 - Numbers on each project row: plan done/total, open todos, tracks, sessions.
+- A project can have a picture of its own in place of its two initials: a PNG, JPG or SVG, resized to 256 × 256 and cropped at the centre. A click on the project's square in the sidebar picks it (a camera shows in its corner under the pointer), as does a tap on it on the phone; the project's Settings also removes it.
 - Search in the Projects tab finds sessions too. A "No project" row gathers sessions no project claims. An X leaves a result out of the search, and "Stop n running" stops the sessions found.
 - Rename from the session menu; a live terminal keeps its name and star across refreshes.
 - A **Prompt improver** next to Commands (Cmd/Ctrl+Shift+P) and after "/" on the phone: the prompt being written, read from the CLI's input box, is rewritten by the session's CLI (Claude Code, Codex or OpenCode) run once and out of sight on the user's own subscription, with the session's last turns and its commands, skills and MCP servers; the result replaces the prompt, nothing is sent, and no session is left behind. The rewriting instructions are editable in Settings on the desktop and the phone.

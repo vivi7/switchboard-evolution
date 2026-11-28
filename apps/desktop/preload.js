@@ -105,6 +105,7 @@ contextBridge.exposeInMainWorld('api', {
   createProject: (spec) => ipcRenderer.invoke('create-project', spec),
   updateProject: (id, patch) => ipcRenderer.invoke('update-project', id, patch),
   setStarredOrder: (ids) => ipcRenderer.invoke('set-starred-order', ids),
+  setProjectIcon: (id, png) => ipcRenderer.invoke('set-project-icon', id, png),
   deleteProject: (id) => ipcRenderer.invoke('delete-project', id),
   attachProjectFolder: (id, spec) => ipcRenderer.invoke('attach-project-folder', id, spec),
   detachProjectFolder: (id, folderPath, opts) => ipcRenderer.invoke('detach-project-folder', id, folderPath, opts),

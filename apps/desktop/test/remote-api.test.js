@@ -188,6 +188,17 @@ test('project, track and folder changes take only the fields the window sends', 
   assert.equal(calls.length, good.length);
 });
 
+test("a phone reads a project's picture and sends a file for it, never the finished one", async () => {
+  const handlers = Object.fromEntries(['get-project-icon', 'import-project-icon', 'set-project-icon'].map(name => [name, () => ({ ok: true })]));
+  const { api, calls } = setup(handlers);
+  assert.deepEqual(await api.call('get-project-icon', ['p1']), { result: { ok: true } });
+  assert.deepEqual(await api.call('import-project-icon', ['p1', 'logo.svg', 'PHN2Zy8+']), { result: { ok: true } });
+  assert.match((await api.call('get-project-icon', [{ id: 'p1' }])).error, /Wrong parameter 1/);
+  assert.match((await api.call('import-project-icon', ['p1', 'logo.svg', 'not base64!'])).error, /Wrong parameter 3/);
+  assert.match((await api.call('set-project-icon', ['p1', null])).error, /Not available remotely/);
+  assert.equal(calls.length, 2);
+});
+
 test('schedules from a phone: the window\'s timings only, no cron or source file', async () => {
   const { api, calls } = setup({ 'create-schedule': () => ({ ok: true }), 'update-schedule': () => ({ ok: true }), 'get-schedule-context': () => ({}) });
   const spec = { name: 'Nightly', prompt: 'Check the build', projectId: 'p1', every: 'day', atHour: 2, atMinute: 30, cli: 'claude', enabled: true };

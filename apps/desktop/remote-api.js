@@ -122,6 +122,10 @@ allow('update-project', [isId, fields({
 })]);
 // The Starred section, in the order it was dragged into.
 allow('set-starred-order', [arrayOf(isId, 1000)]);
+// A project's picture: read to show it in the project's square, and set from a
+// file picked on the phone (a name and its bytes), which the computer makes into the icon.
+allow('get-project-icon', [isId]);
+allow('import-project-icon', [isId, isString(255), isBase64]);
 // Forgets the project; its folder stays on disk.
 allow('delete-project', [isId]);
 allow('create-track', [isId, fields({ name: isName, cwd: optional(isPath), cli: optional(isString(40)) }, ['name'])]);

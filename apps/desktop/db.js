@@ -337,6 +337,8 @@ db.exec(`
   // The editor's language servers for the project, as JSON (lsp/project-servers.js):
   // { enabled: { [serverId]: bool }, found: { [serverId]: { files, extensions } }, scanned: [folders] }.
   if (!cols.has('lspServers')) db.exec('ALTER TABLE projects ADD COLUMN lspServers TEXT');
+  // The version of the project's picture (project-icons.js), null while it shows initials.
+  if (!cols.has('icon')) db.exec('ALTER TABLE projects ADD COLUMN icon TEXT');
 }
 // Which session started or finished a plan phase or a todo. Items are matched
 // by their text, not their line, so editing the file above an item does not
@@ -739,7 +741,7 @@ function deleteSetting(key) {
 
 // --- Project functions ---
 
-const PROJECT_PATCH_KEYS = ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'snoozedUntil', 'snoozedAt', 'starred', 'starRank', 'modified'];
+const PROJECT_PATCH_KEYS = ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'snoozedUntil', 'snoozedAt', 'starred', 'starRank', 'icon', 'modified'];
 const TRACK_PATCH_KEYS = ['name', 'cwd', 'cli', 'status', 'sortOrder'];
 const SCHEDULE_PATCH_KEYS = ['name', 'trackId', 'cwd', 'prompt', 'every', 'atHour', 'atMinute', 'weekday', 'cron', 'cli', 'enabled', 'catchUp', 'lastRunAt', 'lastSessionId', 'sessionConfig'];
 

@@ -645,6 +645,16 @@ ipcMain.handle('create-project', guarded(async (spec) => {
 ipcMain.handle('update-project', guarded((id, patch) => projects.updateProject(id, patch || {})));
 // The Starred section in the order it was dragged into (pinned-order.js).
 ipcMain.handle('set-starred-order', guarded((ids) => projects.setStarredOrder(ids)));
+// A project's picture, shown in its square instead of the initials (project-icons.js).
+ipcMain.handle('set-project-icon', guarded((id, png) => projects.setProjectIcon(id, png)));
+ipcMain.handle('get-project-icon', guarded((id) => projects.projectIcon(id)));
+// A phone sends the picked file itself: the icon is made here, then kept like the window's.
+const renderProjectIcon = require('./project-icon-render').createIconRenderer({ BrowserWindow });
+ipcMain.handle('import-project-icon', guarded(async (id, name, base64) => {
+  if (!dbModule.getProject(id)) return { error: 'Project not found' };
+  const made = await renderProjectIcon(name, base64);
+  return made.error ? { error: made.error } : projects.setProjectIcon(id, made.png);
+}));
 ipcMain.handle('delete-project', guarded((id) => projects.deleteProject(id)));
 ipcMain.handle('attach-project-folder', guarded(trustingNewFolders((id, spec) => projects.attachFolder(id, spec || {}))));
 ipcMain.handle('detach-project-folder', guarded((id, folderPath, opts) => projects.detachFolder(id, folderPath, opts || {})));

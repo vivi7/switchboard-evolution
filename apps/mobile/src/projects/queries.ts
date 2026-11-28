@@ -28,6 +28,26 @@ export function useProjectPlan(id: string | undefined) {
   });
 }
 
+/**
+ * A project's own picture as a data: URL, asked for once per version of it;
+ * null while it has none, or until it arrives.
+ */
+export function useProjectIcon({ id, icon }: Pick<Project, 'id' | 'icon'>): string | null {
+  const online = useConnection((s) => s.status.state === 'online');
+  const query = useQuery({
+    queryKey: ['project-icon', id, icon],
+    queryFn: async () => {
+      const result = await act<{ icon: string | null; dataUrl: string | null }>('get-project-icon', [id]);
+      // Changed meanwhile: not the picture of this version. The tree brings the new one.
+      if (result.icon !== icon) throw new Error('The project icon changed');
+      return result.dataUrl;
+    },
+    enabled: online && !!icon,
+    gcTime: Infinity,
+  });
+  return icon ? query.data ?? null : null;
+}
+
 /** Call the computer; a returned { error } becomes a thrown one. `timeoutMs` for a call known to be slow. */
 export async function act<T = any>(method: string, params: unknown[], options?: { timeoutMs?: number }): Promise<T> {
   const result: any = await request(method, params, options);

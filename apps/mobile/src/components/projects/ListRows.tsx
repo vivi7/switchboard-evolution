@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { Image } from 'expo-image';
 import { Fragment, memo, useState, type ComponentProps, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -7,6 +8,7 @@ import { LeaveOutButton } from '@/components/SearchStopBar';
 import { RamText, StarButton, STATE_COLORS } from '@/components/SessionRow';
 import { markTint, projectInitials, trackTint, type DrawerGroup } from '@/projects/drawer';
 import type { Project, RowStat } from '@/projects/model';
+import { useProjectIcon } from '@/projects/queries';
 import { cliLabel, relativeTime, sessionTitle, shortProjectPath, type RowState, type Session } from '@/sessions/model';
 import { colors, spacing } from '@/theme';
 
@@ -39,13 +41,38 @@ export function SectionToggle({ title, count, open, onPress }: { title: string; 
   );
 }
 
-/** The project's mark: two letters on its own colour. */
-export function ProjectMark({ project, size = 30 }: { project: Pick<Project, 'id' | 'name'>; size?: number }) {
+/**
+ * The project's mark: its own picture, else two letters on its own colour. With
+ * `onPress` it is a button of its own, which picks that picture.
+ */
+export function ProjectMark({ project, size = 30, onPress, onLongPress }: {
+  project: Pick<Project, 'id' | 'name' | 'icon'>;
+  size?: number;
+  onPress?: () => void;
+  onLongPress?: () => void;
+}) {
   const tint = markTint(project.id);
-  return (
-    <View style={[styles.mark, { width: size, height: size, borderRadius: size * 0.25, backgroundColor: tint.bg }]}>
+  const picture = useProjectIcon(project);
+  const box = { width: size, height: size, borderRadius: size * 0.25 };
+  const mark = picture ? (
+    <Image source={{ uri: picture }} style={[styles.mark, box]} contentFit="cover" cachePolicy="memory" accessibilityIgnoresInvertColors />
+  ) : (
+    <View style={[styles.mark, box, { backgroundColor: tint.bg }]}>
       <Text style={[styles.markText, { color: tint.fg, fontSize: Math.round(size * 0.4) }]}>{projectInitials(project.name)}</Text>
     </View>
+  );
+  if (!onPress) return mark;
+  return (
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      hitSlop={HIT}
+      style={({ pressed }) => pressed && styles.markPressed}
+      accessibilityRole="button"
+      accessibilityLabel={`Change the icon of ${project.name}`}
+    >
+      {mark}
+    </Pressable>
   );
 }
 
@@ -54,10 +81,11 @@ export function ProjectMark({ project, size = 30 }: { project: Pick<Project, 'id
  * its numbers (tap one to see what it counts), and on the right its + (a new
  * session in the project) over how many of its sessions run and its state
  * dot. The rest of the row opens the project, and a long press on it shows
- * the project's actions. In the Starred section a handle at its end drags it
- * among the others (components/reorder).
+ * the project's actions. A tap on the mark picks the project's picture. In the
+ * Starred section a handle at its end drags it among the others
+ * (components/reorder).
  */
-export const ProjectListRow = memo(function ProjectListRow({ project, open, dim, state, running, stats, tail, onToggle, onOpen, onLongPress, onNewSession, onLeaveOut, handle }: {
+export const ProjectListRow = memo(function ProjectListRow({ project, open, dim, state, running, stats, tail, onToggle, onOpen, onLongPress, onNewSession, onPickIcon, onLeaveOut, handle }: {
   project: Project;
   open: boolean;
   /** Snoozed or done: quieter, as on the desktop. */
@@ -70,6 +98,8 @@ export const ProjectListRow = memo(function ProjectListRow({ project, open, dim,
   onOpen: () => void;
   onLongPress?: () => void;
   onNewSession?: () => void;
+  /** Only with a desktop that takes a picture from a phone. */
+  onPickIcon?: () => void;
   onLeaveOut?: () => void;
   /** The drag handle, inside a ReorderItem. */
   handle?: boolean;
@@ -95,7 +125,7 @@ export const ProjectListRow = memo(function ProjectListRow({ project, open, dim,
         accessibilityRole="button"
         accessibilityLabel={`${project.name}${project.starred ? ', starred' : ''}, ${spoken}`}
       >
-        <ProjectMark project={project} />
+        <ProjectMark project={project} onPress={onPickIcon} onLongPress={onLongPress} />
         <View style={styles.text}>
           <View style={styles.nameRow}>
             <Text style={styles.name} numberOfLines={1}>{project.name}</Text>
@@ -306,6 +336,7 @@ const styles = StyleSheet.create({
   projectRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingEnd: spacing.md, paddingVertical: 10, borderRadius: 8 },
   mark: { alignItems: 'center', justifyContent: 'center' },
   markText: { fontWeight: '700', letterSpacing: 0.3 },
+  markPressed: { opacity: 0.6 },
   text: { flex: 1, gap: 3, minWidth: 0 },
   name: { color: colors.text, fontSize: 15.5, fontWeight: '600', flexShrink: 1 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
