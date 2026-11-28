@@ -32,8 +32,8 @@ function ensureEnvEditor() {
   host.className = 'ws-editor-panel';
   const panel = new ViewerPanel(host, {
     copyPath: true, copyContent: true, language: 'auto',
-    onSave: async (filePath, content) => {
-      const result = await window.api.saveFileForPanel(filePath, content);
+    onSave: async (filePath, content, options) => {
+      const result = await window.api.saveFileForPanel(filePath, content, options);
       if (!result || result.error || result.ok === false) {
         showEnvError(envEditor?.projectId, result?.error || 'Could not save the file.');
         return { ok: false };

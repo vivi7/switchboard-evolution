@@ -1,10 +1,12 @@
 // The files of the sidebar's Files tab that are not agent files: those opened
 // by dropping them on the sidebar, most recent first. And the files pinned at
 // the top of that tab, in the order the user gave them: any file of the tab,
-// an opened one or an agent file (CLAUDE.md, AGENTS.md, memory…).
+// an opened one or an agent file (CLAUDE.md, AGENTS.md, memory…). And the
+// project groups pinned above the others, in the order the user gave them.
 //
 // Kept in the settings under `openedFiles` as
-//   { opened: [{ filePath, openedAt }], pinned: [filePath, …] }
+//   { opened: [{ filePath, openedAt }], pinned: [filePath, …],
+//     pinnedProjects: [group key, …] }
 // The functions here only shape that value; main.js reads and writes it.
 
 const fs = require('fs');
@@ -14,10 +16,27 @@ const OPENED_FILES_SETTING = 'openedFiles';
 // Opened files the list keeps. Pinned ones are kept beyond it.
 const MAX_OPENED_FILES = 200;
 const MAX_PINNED_FILES = 200;
+const MAX_PINNED_PROJECTS = 200;
 const MAX_PATH_LENGTH = 4096;
 
 function isFilePath(value) {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_PATH_LENGTH && path.isAbsolute(value);
+}
+
+/** A project group of the tab: the name of its folder under ~/.claude/projects. */
+function isProjectKey(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_PATH_LENGTH;
+}
+
+/** The valid values of a stored list, once each, up to `max`. */
+function uniqueValid(list, valid, max) {
+  const out = [];
+  for (const value of Array.isArray(list) ? list : []) {
+    if (!valid(value) || out.includes(value)) continue;
+    out.push(value);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
 function validDate(value) {
@@ -40,12 +59,8 @@ function capOpened(opened, pinned) {
 /** The stored value as it should be: known fields, absolute paths, no repeats. */
 function normalizeOpenedFiles(value) {
   const source = value && typeof value === 'object' ? value : {};
-  const pinned = [];
-  for (const filePath of Array.isArray(source.pinned) ? source.pinned : []) {
-    if (!isFilePath(filePath) || pinned.includes(filePath)) continue;
-    pinned.push(filePath);
-    if (pinned.length >= MAX_PINNED_FILES) break;
-  }
+  const pinned = uniqueValid(source.pinned, isFilePath, MAX_PINNED_FILES);
+  const pinnedProjects = uniqueValid(source.pinnedProjects, isProjectKey, MAX_PINNED_PROJECTS);
   const opened = [];
   const seen = new Set();
   for (const entry of Array.isArray(source.opened) ? source.opened : []) {
@@ -54,7 +69,7 @@ function normalizeOpenedFiles(value) {
     seen.add(filePath);
     opened.push({ filePath, openedAt: validDate(entry.openedAt) ? entry.openedAt : new Date(0).toISOString() });
   }
-  return { opened: capOpened(opened, pinned), pinned };
+  return { opened: capOpened(opened, pinned), pinned, pinnedProjects };
 }
 
 /** These files opened now: at the top of the list, in the order given. */
@@ -68,41 +83,63 @@ function addOpened(state, filePaths, now = new Date()) {
   const openedAt = now.toISOString();
   const rest = current.opened.filter(entry => !fresh.includes(entry.filePath));
   const opened = [...fresh.map(filePath => ({ filePath, openedAt })), ...rest];
-  return { opened: capOpened(opened, current.pinned), pinned: current.pinned };
+  return { ...current, opened: capOpened(opened, current.pinned) };
 }
 
 /** As if the file had never been opened in the app: out of the list and of the pins. */
 function removeOpened(state, filePath) {
   const current = normalizeOpenedFiles(state);
   return {
+    ...current,
     opened: current.opened.filter(entry => entry.filePath !== filePath),
     pinned: current.pinned.filter(p => p !== filePath),
   };
+}
+
+/** `list` with `value` added at its end, or taken out. The same list when nothing changes. */
+function withPin(list, value, pinned, max) {
+  if (!pinned) return list.includes(value) ? list.filter(v => v !== value) : list;
+  if (list.includes(value) || list.length >= max) return list;
+  return [...list, value];
+}
+
+/** `list` with `value` moved to `toIndex` (clamped). The same list when nothing moves. */
+function movedTo(list, value, toIndex) {
+  const from = list.indexOf(value);
+  if (from < 0) return list;
+  const index = Number.isFinite(Number(toIndex)) ? Math.trunc(Number(toIndex)) : from;
+  const to = Math.max(0, Math.min(list.length - 1, index));
+  if (to === from) return list;
+  const next = list.slice();
+  next.splice(from, 1);
+  next.splice(to, 0, value);
+  return next;
 }
 
 /** Pin a file (at the end of the pinned ones) or unpin it. */
 function setPinned(state, filePath, pinned) {
   const current = normalizeOpenedFiles(state);
   if (!isFilePath(filePath)) return current;
-  const without = current.pinned.filter(p => p !== filePath);
-  if (!pinned) return { opened: current.opened, pinned: without };
-  if (current.pinned.includes(filePath)) return current;
-  if (current.pinned.length >= MAX_PINNED_FILES) return current;
-  return { opened: current.opened, pinned: [...current.pinned, filePath] };
+  return { ...current, pinned: withPin(current.pinned, filePath, pinned, MAX_PINNED_FILES) };
 }
 
 /** A pinned file moved to `toIndex` among the pinned ones (clamped). */
 function movePinned(state, filePath, toIndex) {
   const current = normalizeOpenedFiles(state);
-  const from = current.pinned.indexOf(filePath);
-  const index = Number.isFinite(Number(toIndex)) ? Math.trunc(Number(toIndex)) : from;
-  if (from < 0) return current;
-  const to = Math.max(0, Math.min(current.pinned.length - 1, index));
-  if (to === from) return current;
-  const pinned = current.pinned.slice();
-  pinned.splice(from, 1);
-  pinned.splice(to, 0, filePath);
-  return { opened: current.opened, pinned };
+  return { ...current, pinned: movedTo(current.pinned, filePath, toIndex) };
+}
+
+/** Pin a project group (at the end of the pinned ones) or unpin it. */
+function setProjectPinned(state, key, pinned) {
+  const current = normalizeOpenedFiles(state);
+  if (!isProjectKey(key)) return current;
+  return { ...current, pinnedProjects: withPin(current.pinnedProjects, key, pinned, MAX_PINNED_PROJECTS) };
+}
+
+/** A pinned project group moved to `toIndex` among the pinned ones (clamped). */
+function movePinnedProject(state, key, toIndex) {
+  const current = normalizeOpenedFiles(state);
+  return { ...current, pinnedProjects: movedTo(current.pinnedProjects, key, toIndex) };
 }
 
 /** The folder a file is in, as the list shows it: under `~` when it is in the home folder. */
@@ -130,6 +167,7 @@ function describeOpenedFiles(state, options = {}) {
   return {
     opened: current.opened.map(entry => ({ ...describeFile(entry.filePath, options), openedAt: entry.openedAt })),
     pinned: current.pinned.map(filePath => describeFile(filePath, options)),
+    pinnedProjects: current.pinnedProjects,
   };
 }
 
@@ -163,12 +201,16 @@ module.exports = {
   OPENED_FILES_SETTING,
   MAX_OPENED_FILES,
   MAX_PINNED_FILES,
+  MAX_PINNED_PROJECTS,
   isFilePath,
+  isProjectKey,
   normalizeOpenedFiles,
   addOpened,
   removeOpened,
   setPinned,
   movePinned,
+  setProjectPinned,
+  movePinnedProject,
   displayFolder,
   describeFile,
   describeOpenedFiles,

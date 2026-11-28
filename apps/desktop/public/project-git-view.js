@@ -601,8 +601,87 @@ function bindGitDiffPane(project, state, repo, body, item, { key, cached, pickab
 // Edit turns the diff into an editor of the file on disk, with what differs
 // from the staged copy marked as it is typed. Save writes the file and stays
 // in edit mode: the edit becomes a change to stage in the list. Exit Edit
-// Mode goes back to the diff and drops what is not saved. A file stays in
-// edit mode while another file is looked at, and its rows show a pencil.
+// Mode goes back to the diff, after asking when something is not saved. A file
+// stays in edit mode while another file is looked at, and its rows show a
+// pencil. Unsaved text is kept in the file's draft (file-drafts.js), as in every
+// editor (viewer-panel.js): entering edit mode again after a restart brings it back.
+
+// Every file in edit mode in this window.
+const gitEditSessions = new Set();
+let gitEditEventsBound = false;
+const GIT_DRAFT_DELAY_MS = 300;
+
+/** The path on disk of a repository's file, as the other editors name it. */
+function gitEditFilePath(repo, path) {
+  const sep = window.api.platform === 'win32' ? '\\' : '/';
+  return `${String(repo.path).replace(/[\\/]$/, '')}${sep}${path.split('/').join(sep)}`;
+}
+
+function gitStopDraftTimer(session) {
+  if (session.draftTimer) clearTimeout(session.draftTimer);
+  session.draftTimer = null;
+}
+
+/** Write a session's unsaved text to the draft, or drop the draft. False when it could not be written. */
+function gitKeepEdit(session) {
+  gitStopDraftTimer(session);
+  if (!window.api.setDraft || !gitEditSessions.has(session)) return true;
+  if (!gitEditDirty(session)) {
+    gitDropEditDraft(session);
+    return true;
+  }
+  const content = gitEditText(session.view);
+  if (session.kept === content) return true;
+  const draft = { content, base: session.saved };
+  const result = window.api.setDraft(session.filePath, draft);
+  if (!result?.ok) return false;
+  session.kept = content;
+  shareViewerDraft({ filePath: session.filePath, state: 'dirty', ...draft });
+  return true;
+}
+
+function gitDropEditDraft(session) {
+  if (session.kept === null || session.kept === undefined) return;
+  session.kept = null;
+  const change = { filePath: session.filePath, state: 'clean', content: session.saved };
+  window.api.removeDraft?.(session.filePath, change);
+  shareViewerDraft(change);
+}
+
+/** The same file's unsaved text changed in another editor: this one follows. */
+function gitFollowDraft(session, { state, content }) {
+  if (typeof content !== 'string') return;
+  gitStopDraftTimer(session);
+  session.kept = state === 'dirty' ? content : null;
+  if (state !== 'dirty') session.saved = content;
+  if (gitEditText(session.view) !== content) window.cmSetText?.(session.view, content);
+}
+
+function bindGitEditEvents() {
+  if (gitEditEventsBound || !window.addEventListener) return;
+  gitEditEventsBound = true;
+  window.addEventListener('viewer-drafts-changed', (event) => {
+    for (const session of gitEditSessions) {
+      if (session.filePath === event.detail?.filePath) gitFollowDraft(session, event.detail);
+    }
+  });
+  // As the viewers: what is typed is kept before the window goes.
+  window.addEventListener('beforeunload', (event) => {
+    let kept = true;
+    for (const session of gitEditSessions) if (!gitKeepEdit(session)) kept = false;
+    if (kept) return;
+    event.preventDefault();
+    event.returnValue = false;
+  });
+}
+
+/** A file leaves edit mode: its editor goes. */
+function gitDropEditSession(session) {
+  gitStopDraftTimer(session);
+  gitEditSessions.delete(session);
+  session.view.destroy();
+  session.host.remove();
+}
 
 /** The text of a file in edit mode, with the file's line breaks (CRLF stays CRLF). */
 function gitEditText(view) {
@@ -648,12 +727,29 @@ async function gitStartEdit(project, state, repo, body, item) {
   if (state.editors.has(key)) return;
   const host = document.createElement('div');
   host.className = 'git-edit-editor';
-  const session = { host, view: null, version: result.version, saved: result.content, busy: false };
+  const filePath = gitEditFilePath(repo, item.change.path);
+  const session = { host, view: null, version: result.version, saved: result.content, busy: false, filePath, kept: null, draftTimer: null };
   session.view = window.createUnifiedMergeViewer(host, result.base, result.content, item.change.path, {
-    readOnly: false, mergeControls: false, collapse: false, onDocChange: () => gitEditButtons(body, session),
+    readOnly: false, mergeControls: false, collapse: false,
+    onDocChange: () => {
+      gitEditButtons(body, session);
+      gitStopDraftTimer(session);
+      if (gitEditSessions.has(session)) session.draftTimer = setTimeout(() => gitKeepEdit(session), GIT_DRAFT_DELAY_MS);
+    },
   });
   // What an edit differs from: the text as the editor gives it back, its line breaks made one kind.
   session.saved = gitEditText(session.view);
+  gitEditSessions.add(session);
+  bindGitEditEvents();
+  // Unsaved text kept for this file comes back.
+  const draft = window.api.getDraft?.(filePath);
+  if (draft) {
+    const plain = text => String(text).replace(/\r\n/g, '\n');
+    session.kept = draft.content;
+    if (plain(draft.content) !== plain(session.saved)) window.cmSetText?.(session.view, draft.content);
+    // The file changed since those edits began: saving asks before overwriting it.
+    if (plain(draft.base) !== plain(session.saved)) session.version = 'changed-since-draft';
+  }
   // ⌘S in the editor.
   host.addEventListener('cm-save', (event) => {
     event.stopPropagation();
@@ -676,6 +772,7 @@ async function gitSaveEdit(project, state, repo, body, item, session, { force = 
   if (result && result.ok) {
     session.version = result.version;
     session.saved = text;
+    gitKeepEdit(session);
     gitEditButtons(body, session);
     // The lists, with the edit to stage.
     await refreshGitRepositories(project, state, body);
@@ -695,14 +792,23 @@ async function gitSaveEdit(project, state, repo, body, item, session, { force = 
   alert(result?.error || 'Could not save the file.');
 }
 
-/** Back to the diff, read again; what is not saved is dropped. */
+/** Back to the diff, read again; what is not saved is dropped, once the user agrees. */
 async function gitExitEdit(project, state, repo, body, item) {
   const key = gitEditKey(repo, item.change.path);
   const session = state.editors.get(key);
   if (!session) return;
+  if (gitEditDirty(session)) {
+    const name = pathBasename(item.change.path) || item.change.path;
+    const discard = await gitChangesConfirm({
+      title: `Discard your changes to “${name}”?`,
+      detail: 'They are not saved, and leaving edit mode drops them.',
+      confirm: 'Discard',
+    });
+    if (!discard || state.editors.get(key) !== session) return;
+  }
+  gitDropEditDraft(session);
   state.editors.delete(key);
-  session.view.destroy();
-  session.host.remove();
+  gitDropEditSession(session);
   for (const side of ['unstaged', 'staged', 'merge']) state.diffs.delete(gitDiffKey(repo, side, item.change.path));
   await refreshGitRepositories(project, state, body);
 }
@@ -1100,8 +1206,8 @@ function paintGitChanges(project, state, repo, body, { repaintDiff = true } = {}
     for (const [key, session] of state.editors) {
       if (!key.startsWith(`${repo.path}\0`) || repo.changes.some(c => gitEditKey(repo, c.path) === key) || gitEditDirty(session)) continue;
       state.editors.delete(key);
-      session.view.destroy();
-      session.host.remove();
+      gitDropEditDraft(session);
+      gitDropEditSession(session);
     }
   }
   const tree = gitChangesViewMode() === 'tree';

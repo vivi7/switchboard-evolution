@@ -21,7 +21,7 @@
 // sessionBusyState, sessionMap, pendingSessions, openSessions, activeTab,
 // gridViewActive, visibleSessionCount, loadProjects, refreshSidebar, launchNewSession,
 // openSession, pollActiveSessions, placeholder, terminalArea, memoryViewer,
-// memoryPanel, hideAllViewers, showSession, fitAndScroll,
+// hideAllViewers, showSession, fitAndScroll,
 // resolveDefaultSessionOptions
 // Depends on sidebar.js: isSessionRunning
 // Depends on task-runner.js: showTaskPopover, tasksByPath, updateTaskButton,
@@ -276,6 +276,7 @@ const PICONS = {
   refresh: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-2L20 8M4 16l2.3 3A7 7 0 0 0 17.9 17"/></svg>`,
   plus: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`,
   chevronDown: (s = 11) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
+  chevronLeft: (s = 11) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>`,
   chevronRight: (s = 11) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>`,
   // Expand all / Collapse all (chevrons apart, chevrons together).
   expandAll: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>`,
@@ -1979,7 +1980,7 @@ function renderOverview() {
   const tabsScroll = projectViewer.querySelector('.ws-tabs')?.scrollLeft || 0;
   projectViewer.innerHTML = `${header}
     <div class="ws-body" id="ws-body"></div>`;
-  bindWorkspaceTabs(projectViewer.querySelector('.ws-tabs'), tabsScroll);
+  bindScrollingTabs(projectViewer.querySelector('.ws-tabs'), '.ws-tab.active', tabsScroll);
 
   const body = projectViewer.querySelector('#ws-body');
   // The Session tab's content is the terminal area, laid out under the header by CSS.
@@ -2082,9 +2083,10 @@ function projectWindowHeaderHtml(project, tabName) {
     </div>`;
 }
 
-// --- The project page's tab bar: it scrolls sideways in a narrow window ---
+// --- Tab bars that scroll sideways in a narrow window: the project page's, Node Knowledge's views ---
 
-let workspaceTabsObserver = null;
+// One for each bar, found by the selector of its open tab: drawn again, the bar leaves the old one.
+const scrollingTabsObservers = new Map();
 
 /**
  * When the window is too narrow for every tab, the bar scrolls sideways (its
@@ -2092,11 +2094,13 @@ let workspaceTabsObserver = null;
  * mouse wheel moves it, a fade shows on the side that has more tabs, and the
  * open tab is kept in sight, as the page is drawn again or the window gets
  * narrower. `scrollLeft` is where the bar was before the page was drawn again.
+ * An arrow on the side that has more tabs moves the bar too.
  */
-function bindWorkspaceTabs(tabs, scrollLeft = 0) {
-  workspaceTabsObserver?.disconnect();
-  workspaceTabsObserver = null;
+function bindScrollingTabs(tabs, activeSelector, scrollLeft = 0) {
+  scrollingTabsObservers.get(activeSelector)?.disconnect();
+  scrollingTabsObservers.delete(activeSelector);
   if (!tabs) return;
+  addScrollArrows(tabs);
   const sync = () => {
     const max = tabs.scrollWidth - tabs.clientWidth;
     tabs.classList.toggle('more-left', tabs.scrollLeft > 1);
@@ -2104,7 +2108,7 @@ function bindWorkspaceTabs(tabs, scrollLeft = 0) {
   };
   // The open tab in sight, clear of the fade at that side.
   const reveal = () => {
-    const active = tabs.querySelector('.ws-tab.active');
+    const active = tabs.querySelector(activeSelector);
     if (!active) return;
     const item = active.closest('.ws-tab-group') || active;
     const bar = tabs.getBoundingClientRect();
@@ -2124,11 +2128,36 @@ function bindWorkspaceTabs(tabs, scrollLeft = 0) {
   if (typeof ResizeObserver !== 'undefined') {
     // A window made narrower keeps the open tab in sight, and so does a tab
     // that grows (the plan and todo counts arrive after the page is drawn).
-    workspaceTabsObserver = new ResizeObserver(() => { reveal(); sync(); });
-    workspaceTabsObserver.observe(tabs);
-    for (const item of tabs.children) workspaceTabsObserver.observe(item);
+    const observer = new ResizeObserver(() => { reveal(); sync(); });
+    observer.observe(tabs);
+    for (const item of tabs.children) observer.observe(item);
+    scrollingTabsObservers.set(activeSelector, observer);
   }
   sync();
+}
+
+/** Put the bar in a box of its own with an arrow over each end; the style sheet shows the one whose side has more. */
+function addScrollArrows(tabs) {
+  if (tabs.parentElement.classList.contains('tabs-scroll')) return;
+  const box = document.createElement('div');
+  box.className = 'tabs-scroll';
+  tabs.replaceWith(box);
+  box.append(tabs);
+  for (const [side, step, icon] of [['left', -1, PICONS.chevronLeft], ['right', 1, PICONS.chevronRight]]) {
+    const arrow = document.createElement('button');
+    arrow.type = 'button';
+    arrow.className = `tabs-arrow tabs-arrow--${side}`;
+    // For the mouse: the keyboard reaches each tab by itself.
+    arrow.tabIndex = -1;
+    arrow.title = `Scroll the tabs ${side}`;
+    arrow.setAttribute('aria-label', arrow.title);
+    arrow.innerHTML = icon(12);
+    arrow.onclick = () => {
+      const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      tabs.scrollBy({ left: step * tabs.clientWidth * 0.6, behavior: still ? 'auto' : 'smooth' });
+    };
+    box.append(arrow);
+  }
 }
 
 /** A Compare window's page (main.js openGitCompareWindow): the comparison of its commits, filling the window. */

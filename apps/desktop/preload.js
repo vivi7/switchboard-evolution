@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('api', {
   removeOpenedFile: (filePath) => ipcRenderer.invoke('remove-opened-file', filePath),
   setFilePinned: (filePath, pinned) => ipcRenderer.invoke('set-file-pinned', filePath, pinned),
   movePinnedFile: (filePath, toIndex) => ipcRenderer.invoke('move-pinned-file', filePath, toIndex),
+  setFilesProjectPinned: (key, pinned) => ipcRenderer.invoke('set-files-project-pinned', key, pinned),
+  movePinnedFilesProject: (key, toIndex) => ipcRenderer.invoke('move-pinned-files-project', key, toIndex),
   openFileWindow: (filePath) => ipcRenderer.invoke('open-file-window', filePath),
   getProjects: (showArchived) => ipcRenderer.invoke('get-projects', showArchived),
   getHarnesses: () => ipcRenderer.invoke('get-harnesses'),
@@ -440,9 +442,18 @@ contextBridge.exposeInMainWorld('api', {
   getFileTimelineDiff: (projectPath, relativePath, hash, repoPath, oldPath) => ipcRenderer.invoke('get-file-timeline-diff', projectPath, relativePath, hash, repoPath, oldPath),
   getFileAtCommit: (projectPath, relativePath, hash, repoPath) => ipcRenderer.invoke('get-file-at-commit', projectPath, relativePath, hash, repoPath),
   openFileWithApp: (filePath, projectRoot, appPath) => ipcRenderer.invoke('open-file-with-app', filePath, projectRoot, appPath),
-  saveFileForPanel: (filePath, content) => ipcRenderer.invoke('save-file-for-panel', filePath, content),
+  saveFileForPanel: (filePath, content, options) => ipcRenderer.invoke('save-file-for-panel', filePath, content, options),
   // 'save', 'discard' or 'cancel', for an editor with unsaved changes.
   confirmUnsavedChanges: (fileName) => ipcRenderer.invoke('confirm-unsaved-changes', fileName),
+  // Unsaved edits, kept until saved or dropped (file-drafts.js). Synchronous:
+  // a window that closes writes its last keys before it goes.
+  getDraft: (filePath) => ipcRenderer.sendSync('draft-get', filePath),
+  setDraft: (filePath, draft) => ipcRenderer.sendSync('draft-set', filePath, draft),
+  removeDraft: (filePath, change) => ipcRenderer.sendSync('draft-remove', filePath, change),
+  listDrafts: () => ipcRenderer.invoke('list-drafts'),
+  onDraftChanged: (callback) => {
+    ipcRenderer.on('draft-changed', (_event, change) => callback(change));
+  },
   watchFile: (filePath) => ipcRenderer.invoke('watch-file', filePath),
   unwatchFile: (filePath) => ipcRenderer.invoke('unwatch-file', filePath),
   onFileChanged: (callback) => {

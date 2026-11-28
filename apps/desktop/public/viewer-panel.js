@@ -26,10 +26,16 @@
  * and go to symbol (Cmd/Ctrl+Shift+O) open from the toolbar too, from its
  * Find button, and when no field has the focus (the last viewer used); in a
  * Markdown or JSON preview Cmd/Ctrl+F searches the rendered text. The title
- * shows a dot while there are unsaved changes; showing another file asks
- * about them first (confirmLeave). A change on disk while there are none
- * reloads the text in place, keeping the cursor; with unsaved changes it asks
- * (Reload, Keep Mine, Compare) instead of losing them.
+ * shows a dot while there are unsaved changes; a viewer asked to show another
+ * file in their place asks about them first (confirmLeave). A change on disk
+ * while there are none reloads the text in place, keeping the cursor; with
+ * unsaved changes it asks (Reload, Keep Mine, Compare) instead of losing them.
+ *
+ * Unsaved text is never held by the editor alone: a moment after the typing
+ * pauses, and when the window closes, it goes into the file's draft
+ * (file-drafts.js), which any viewer opening the file puts back, after a
+ * restart too. Viewers of the same file, in this window or another, show the
+ * same unsaved text. A save, or Don't Save, drops the draft.
  *
  * Depends on: viewer-toolbar.js, codemirror-bundle.js
  */
@@ -87,6 +93,52 @@ function isTypingTarget(el) {
 const viewerPanels = new Set();
 let lastViewerPanel = null;
 
+// How long after the last edit the draft is written, and the longest it waits
+// while the typing goes on.
+const VIEWER_DRAFT_DELAY_MS = 300;
+const VIEWER_DRAFT_MAX_WAIT_MS = 2000;
+// Told to the window when a file's draft is written or dropped (editor-tabs.js, files-view.js).
+const VIEWER_DRAFTS_EVENT = 'viewer-drafts-changed';
+
+/**
+ * A file's unsaved text was kept, or dropped: this window's viewers of it follow
+ * (but `from`, which did it), and whoever lists the drafts is told.
+ */
+function shareViewerDraft(change, from = null) {
+  for (const panel of viewerPanels) if (panel !== from) panel._draftChangedElsewhere(change);
+  window.dispatchEvent(new CustomEvent(VIEWER_DRAFTS_EVENT, { detail: change }));
+}
+
+/** Whether two texts differ in their line breaks at most. */
+function sameViewerText(a, b) {
+  return window.cmNormalizeEol ? window.cmNormalizeEol(a, '\n') === window.cmNormalizeEol(b, '\n') : a === b;
+}
+
+// One subscription for every viewer of this window: a file changed on disk, its
+// unsaved text changed in another window, and the window closing.
+let viewerEventsBound = false;
+
+function bindViewerEvents() {
+  if (viewerEventsBound) return;
+  viewerEventsBound = true;
+  window.api.onFileChanged?.((changedPath) => {
+    for (const panel of [...viewerPanels]) panel._onFileChanged(changedPath);
+  });
+  window.api.onDraftChanged?.((change) => {
+    for (const panel of [...viewerPanels]) panel._draftChangedElsewhere(change);
+    window.dispatchEvent(new CustomEvent(VIEWER_DRAFTS_EVENT, { detail: change }));
+  });
+  // What is typed goes into the drafts before the window does. One that cannot
+  // be written holds the window until main has asked (will-prevent-unload).
+  window.addEventListener('beforeunload', (event) => {
+    let kept = true;
+    for (const panel of viewerPanels) if (!panel._flushDraft()) kept = false;
+    if (kept) return;
+    event.preventDefault();
+    event.returnValue = false;
+  });
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.defaultPrevented) return;
   const action = viewerFindKey(e);
@@ -109,15 +161,31 @@ class ViewerPanel {
    * @param {boolean}   opts.copyContent  - Show copy-content button
    * @param {string}    opts.language     - 'markdown' or 'auto' (default 'markdown')
    * @param {string}    opts.storageKey   - localStorage key for preview mode persistence
-   * @param {Function}  opts.openFile     - async (filePath, { line, column }) => false | void, how the host
-   *                                        opens another file (Go to Definition); false (or none) and this viewer opens it
+   * @param {Function}  opts.openFile     - async (filePath, { line, column }) => false | ViewerPanel | void, how
+   *                                        the host opens another file (Go to Definition): the panel it opened it
+   *                                        in when not this one; false (or none) and this viewer opens it
+   * @param {Object}    opts.history      - { back: [], forward: [] }, Go Back's places, shared by a host's tabs
+   * @param {Function}  opts.onDirtyChange - (dirty) => void, as unsaved changes come and go
    */
   constructor(container, opts = {}) {
     this.container = container;
     this.opts = opts;
     // Where Go to Definition came from, for Go Back and Go Forward: { filePath, line, column }.
-    this._navBack = [];
-    this._navForward = [];
+    this._history = opts.history || { back: [], forward: [] };
+
+    // The draft: whether one is kept for the file shown, its text, and the
+    // file's text the edits started from.
+    this._draftTimer = null;
+    this._draftDue = 0;
+    this._draftStored = false;
+    this._draftContent = null;
+    this._base = null;
+    // The text being put in the editor comes from disk or a draft, not the keyboard.
+    this._applyingShared = false;
+    this._discarded = false;
+    // Unsaved text shown for a file that is no longer on disk.
+    this._missing = false;
+    this._dirtyShown = false;
 
     // State
     this.filePath = '';
@@ -179,11 +247,13 @@ class ViewerPanel {
     this._wireEvents();
 
     this._applyFontStep(readViewerFontStep());
-    window.addEventListener(VIEWER_FONT_STEP_EVENT, (e) => this._applyFontStep(e.detail));
+    this._onFontStep = (e) => this._applyFontStep(e.detail);
+    window.addEventListener(VIEWER_FONT_STEP_EVENT, this._onFontStep);
     // Another window changed it (localStorage is shared by the app's windows).
-    window.addEventListener('storage', (e) => {
+    this._onStorage = (e) => {
       if (e.key === VIEWER_FONT_STEP_KEY) this._applyFontStep(readViewerFontStep());
-    });
+    };
+    window.addEventListener('storage', this._onStorage);
 
     // Listen for Cmd/Ctrl+S from CM editors
     container.addEventListener('cm-save', () => this._save());
@@ -193,15 +263,12 @@ class ViewerPanel {
     container.addEventListener('focusin', () => { lastViewerPanel = this; });
     viewerPanels.add(this);
 
-    // Listen for file changes from main process
-    this._onFileChanged = (changedPath) => {
-      if (changedPath === this._watchedPath && !this._saving) {
-        this._reloadFromDisk();
-      }
-    };
-    if (window.api.onFileChanged) {
-      window.api.onFileChanged(this._onFileChanged);
-    }
+    bindViewerEvents();
+  }
+
+  /** The file changed on disk (main process). */
+  _onFileChanged(changedPath) {
+    if (changedPath === this._watchedPath && !this._saving) this._reloadFromDisk();
   }
 
   _wireEvents() {
@@ -292,9 +359,20 @@ class ViewerPanel {
   }
 
   /**
-   * Open a file in the viewer.
+   * Open a file in the viewer. `preview.fresh`: the text given replaces what is
+   * typed (a save that changed the file). `preview.missing`: the file is gone
+   * and `content` is what its kept draft started from.
    */
   open(title, filePath, content = '', preview = {}) {
+    // What was typed in the file shown is kept before it goes.
+    if (!preview.fresh) this._flushDraft();
+    clearTimeout(this._draftTimer);
+    this._draftStored = false;
+    this._draftContent = null;
+    this._discarded = false;
+    this._base = null;
+    this._missing = !!preview.missing;
+    this._hideNotice();
     this._unwatchFile();
     this._clearPreview();
     this._hideConflict();
@@ -368,7 +446,10 @@ class ViewerPanel {
     // line breaks made one kind), so a file of mixed line breaks is not
     // "changed" before anything is typed.
     this._savedContent = this.getContent();
+    this._base = this._savedContent;
     this._updateDirty();
+    if (!preview.fresh) this._restoreDraft();
+    if (this._missing) this._showNotice('This file is no longer on disk. Save writes it again.');
 
     // Set wrap default based on file type
     this.wrapMode = isMd;
@@ -398,8 +479,8 @@ class ViewerPanel {
     return {
       openLocation: (filePath, at = {}) => this._openLocation(filePath, at),
       remember: () => this._remember(),
-      back: () => this._step(this._navBack, this._navForward),
-      forward: () => this._step(this._navForward, this._navBack),
+      back: () => this._step(this._history.back, this._history.forward),
+      forward: () => this._step(this._history.forward, this._history.back),
     };
   }
 
@@ -416,10 +497,11 @@ class ViewerPanel {
   _remember() {
     const here = this._here();
     if (!here) return;
-    const last = this._navBack[this._navBack.length - 1];
-    if (!last || last.filePath !== here.filePath || last.line !== here.line) this._navBack.push(here);
-    if (this._navBack.length > 50) this._navBack.shift();
-    this._navForward = [];
+    const { back, forward } = this._history;
+    const last = back[back.length - 1];
+    if (!last || last.filePath !== here.filePath || last.line !== here.line) back.push(here);
+    if (back.length > 50) back.shift();
+    forward.length = 0;
   }
 
   _step(from, to) {
@@ -438,11 +520,16 @@ class ViewerPanel {
       this.editorView?.focus();
       return this.editorView;
     }
-    if (this.opts.openFile && (await this.opts.openFile(filePath, { line, column })) !== false) {
-      if (this.filePath !== filePath) return null;
-      // The keys (Go Back, F12 again) go on in the file just opened.
-      this.editorView?.focus();
-      return this.editorView;
+    if (this.opts.openFile) {
+      const opened = await this.opts.openFile(filePath, { line, column });
+      if (opened !== false) {
+        // Shown here, or in the panel (a tab) the host answers with.
+        const panel = opened?.filePath !== undefined ? opened : this;
+        if (panel.filePath !== filePath) return null;
+        // The keys (Go Back, F12 again) go on in the file just opened.
+        panel.editorView?.focus();
+        return panel.editorView;
+      }
     }
     return this.openHere(filePath, { line, column });
   }
@@ -511,7 +598,8 @@ class ViewerPanel {
 
   /** The text differs from what is on disk. */
   isDirty() {
-    return !!this.editorView && !!this.filePath && this._savedContent !== null && this.getContent() !== this._savedContent;
+    return !!this.editorView && !!this.filePath && this._savedContent !== null
+      && (this._missing || this.getContent() !== this._savedContent);
   }
 
   /** The editor's text replaced with `content`, changing only what differs (the cursor stays). */
@@ -523,7 +611,11 @@ class ViewerPanel {
 
   /** The title's dot follows whether there are unsaved changes. */
   _updateDirty() {
-    if (this.toolbar.setDirty) this.toolbar.setDirty(this.isDirty());
+    const dirty = this.isDirty();
+    if (this.toolbar.setDirty) this.toolbar.setDirty(dirty);
+    if (dirty === this._dirtyShown) return;
+    this._dirtyShown = dirty;
+    this.opts.onDirtyChange?.(dirty);
   }
 
   /**
@@ -542,6 +634,7 @@ class ViewerPanel {
       await this._save({ quiet: true });
       return !this.isDirty();
     }
+    this.discardDraft();
     return true;
   }
 
@@ -609,9 +702,17 @@ class ViewerPanel {
     if (action && this.runFindKey(action, e)) e.preventDefault();
   }
 
-  /** After an edit: with autosave, save once the typing has stopped. */
+  /** After an edit: keep the draft; with autosave, save once the typing has stopped. */
   _edited() {
     this._updateDirty();
+    if (this._applyingShared) return;
+    this._discarded = false;
+    if (this._draftsOn()) {
+      clearTimeout(this._draftTimer);
+      this._draftDue ||= Date.now() + VIEWER_DRAFT_MAX_WAIT_MS;
+      const wait = Math.max(0, Math.min(VIEWER_DRAFT_DELAY_MS, this._draftDue - Date.now()));
+      this._draftTimer = setTimeout(() => this._flushDraft(), wait);
+    }
     if (!this.opts.autosaveMs || !this.opts.onSave) return;
     clearTimeout(this._autosaveTimer);
     this._autosaveTimer = setTimeout(() => {
@@ -623,6 +724,121 @@ class ViewerPanel {
   async flush() {
     clearTimeout(this._autosaveTimer);
     if (this.isDirty()) await this._save({ quiet: true });
+  }
+
+  // ── Drafts: unsaved text kept until it is saved or dropped ─────────
+
+  _draftsOn() {
+    return !!(this.opts.onSave && window.api.setDraft && this.editorView && this.filePath) && !this._isMedia();
+  }
+
+  /** The unsaved text kept for this file, put back in the editor. */
+  _restoreDraft() {
+    if (!this._draftsOn()) return;
+    const draft = window.api.getDraft?.(this.filePath);
+    if (typeof draft?.content !== 'string') return;
+    const disk = this._savedContent;
+    this._draftStored = true;
+    if (!this._missing && sameViewerText(draft.content, disk)) {
+      this._dropDraft();
+      return;
+    }
+    this._applyShared(draft.content);
+    this._draftContent = this.getContent();
+    this._base = typeof draft.base === 'string' ? draft.base : disk;
+    this._updateDirty();
+    // The file moved on since the edits began: asked, as for a change on disk.
+    if (!this._missing && !sameViewerText(this._base, disk)) this._showConflict(disk);
+    if (this.opts.autosaveMs) this._edited();
+  }
+
+  /** Write what is unsaved to the draft now, or drop the draft when nothing is. False when it could not be written. */
+  _flushDraft() {
+    clearTimeout(this._draftTimer);
+    this._draftDue = 0;
+    if (this._discarded || !this._draftsOn() || this._savedContent === null) return true;
+    if (!this.isDirty()) {
+      this._dropDraft();
+      return true;
+    }
+    const content = this.getContent();
+    if (this._draftStored && content === this._draftContent) return true;
+    const draft = { content, base: this._base ?? this._savedContent };
+    const result = window.api.setDraft(this.filePath, draft);
+    if (!result?.ok) {
+      this._draftContent = null;
+      this._showNotice(`Switchboard could not keep a copy of your unsaved changes (${result?.error || 'unknown error'}). Save the file.`);
+      return false;
+    }
+    if (!this._missing) this._hideNotice();
+    this._draftStored = true;
+    this._draftContent = content;
+    this._shareDraft({ filePath: this.filePath, state: 'dirty', ...draft });
+    return true;
+  }
+
+  _dropDraft() {
+    if (!this._draftStored) return;
+    this._draftStored = false;
+    this._draftContent = null;
+    const change = { filePath: this.filePath, state: 'clean', content: this._savedContent };
+    window.api.removeDraft?.(this.filePath, change);
+    this._shareDraft(change);
+  }
+
+  /** Don't Save: the draft goes, and is not written again unless something more is typed. */
+  discardDraft() {
+    clearTimeout(this._draftTimer);
+    this._discarded = true;
+    this._dropDraft();
+  }
+
+  /** The other viewers of the file in this window follow (main tells the other windows). */
+  _shareDraft(change) {
+    shareViewerDraft(change, this);
+  }
+
+  /** The file's unsaved text changed, or went, in another viewer: this one follows. */
+  _draftChangedElsewhere({ filePath, state, content, base } = {}) {
+    if (filePath !== this.filePath || typeof content !== 'string' || !this._draftsOn()) return;
+    clearTimeout(this._draftTimer);
+    this._applyShared(content);
+    this._draftStored = state === 'dirty';
+    if (state === 'dirty') {
+      this._draftContent = this.getContent();
+      this._base = base ?? this._base;
+    } else {
+      this._draftContent = null;
+      this._savedContent = this.getContent();
+      this._base = this._savedContent;
+      this._missing = false;
+      this._hideConflict();
+      this._hideNotice();
+    }
+    this._updateDirty();
+    if (this.previewMode) this._renderPreview();
+  }
+
+  /** Put text in the editor that was not typed here: no draft, no autosave for it. */
+  _applyShared(content) {
+    this._applyingShared = true;
+    try { this._setEditorText(content); } finally { this._applyingShared = false; }
+  }
+
+  _showNotice(text) {
+    if (!this.noticeEl) {
+      const bar = document.createElement('div');
+      bar.className = 'viewer-conflict-bar viewer-notice-bar';
+      bar.setAttribute('role', 'alert');
+      this.toolbar.el.after(bar);
+      this.noticeEl = bar;
+    }
+    this.noticeEl.textContent = text;
+    this.noticeEl.hidden = false;
+  }
+
+  _hideNotice() {
+    if (this.noticeEl) this.noticeEl.hidden = true;
   }
 
   _togglePreview() {
@@ -786,19 +1002,43 @@ class ViewerPanel {
     this._saving = true;
     const content = this.getContent();
     const filePath = this.filePath;
+    const version = this._openVersion;
+    const kept = this._draftStored;
     try {
-      const result = await this.opts.onSave(filePath, content);
+      const result = await (this._missing
+        ? this.opts.onSave(filePath, content, { create: true })
+        : this.opts.onSave(filePath, content));
       if (result && result.ok !== false) {
-        if (this.filePath === filePath && typeof this._savedContent === 'string') this._savedContent = content;
-        // What was on disk has been replaced: the question about it is answered.
-        if (this.filePath === filePath) this._hideConflict();
+        if (this.filePath === filePath) {
+          // A host that opened other text while saving (the project's brief) set what is saved.
+          if (version === this._openVersion && typeof this._savedContent === 'string') {
+            this._savedContent = content;
+            this._missing = false;
+            this._hideNotice();
+          }
+          this._base = this._savedContent;
+          // What was on disk has been replaced: the question about it is answered.
+          this._hideConflict();
+        }
         this._updateDirty();
+        this._settleDraft(filePath, kept);
         // An autosave says nothing: the button flashing every few seconds would only distract.
         if (!quiet) this.toolbar.flashSave();
       }
     } finally {
       setTimeout(() => { this._saving = false; }, 500);
     }
+  }
+
+  /** After a save: nothing is kept for what is on disk; text typed meanwhile stays kept. */
+  _settleDraft(filePath, kept) {
+    if (this.filePath !== filePath) {
+      if (kept) window.api.removeDraft?.(filePath);
+      return;
+    }
+    if (kept) this._draftStored = true;
+    this._draftContent = null;
+    this._flushDraft();
   }
 
   // Opens the file as saved on disk; unsaved edits stay in this editor.
@@ -825,6 +1065,13 @@ class ViewerPanel {
 
   // Keep the current buffer when its file (or an ancestor folder) is renamed.
   async relocate(title, filePath) {
+    const dirty = this.isDirty();
+    const saved = this._savedContent;
+    const base = this._base;
+    // The draft went with the file (file-drafts.js follow); it is written again below.
+    clearTimeout(this._draftTimer);
+    this._draftStored = false;
+    this._draftContent = null;
     this._unwatchFile();
     const version = ++this._openVersion;
     this.filePath = filePath;
@@ -838,10 +1085,16 @@ class ViewerPanel {
       // to a binary preview. Reopening later uses the new file type normally.
       const preview = this.editorView && ['image', 'pdf', 'pptx'].includes(result.previewType)
         ? { ...result, previewType: 'text' } : result;
-      this.open(title, filePath, this.editorView ? this.getContent() : result.content, preview);
+      this.open(title, filePath, this.editorView ? this.getContent() : result.content, { ...preview, fresh: true });
+      if (dirty && this.editorView) {
+        this._savedContent = saved;
+        this._base = base;
+        this._updateDirty();
+      }
     } else {
       this._watchFile(filePath);
     }
+    if (dirty) this._flushDraft();
     return result;
   }
 
@@ -851,7 +1104,16 @@ class ViewerPanel {
     return window.cmGetText ? window.cmGetText(this.editorView) : this.editorView.state.doc.toString();
   }
 
-  destroy() {
+  /** Empty the viewer. Unsaved text stays in its draft, unless `discard` (the file went to the Trash). */
+  destroy({ discard = false } = {}) {
+    if (discard) this.discardDraft();
+    else this._flushDraft();
+    clearTimeout(this._draftTimer);
+    this._draftStored = false;
+    this._draftContent = null;
+    this._base = null;
+    this._missing = false;
+    this._hideNotice();
     this._unwatchFile();
     clearTimeout(this._autosaveTimer);
     this._hideConflict();
@@ -863,6 +1125,15 @@ class ViewerPanel {
     this.previewMode = false;
     this._jsonState = { open: null };
     this._updateDirty();
+  }
+
+  /** Gone for good (a closed tab): the viewer is emptied and stops listening. */
+  dispose(options) {
+    this.destroy(options);
+    viewerPanels.delete(this);
+    if (lastViewerPanel === this) lastViewerPanel = null;
+    window.removeEventListener?.(VIEWER_FONT_STEP_EVENT, this._onFontStep);
+    window.removeEventListener?.('storage', this._onStorage);
   }
 
   _destroyEditor() {
@@ -904,12 +1175,16 @@ class ViewerPanel {
     }
 
     const newContent = result.content;
-    const sameText = (a, b) => (window.cmNormalizeEol ? window.cmNormalizeEol(a, '\n') === window.cmNormalizeEol(b, '\n') : a === b);
-    if (sameText(newContent, this.getContent())) {
+    const wasMissing = this._missing;
+    this._missing = false;
+    if (wasMissing) this._hideNotice();
+    if (sameViewerText(newContent, this.getContent())) {
       // On disk is what the editor has (the save just made, or the same edit).
       this._savedContent = this.getContent();
+      this._base = this._savedContent;
       this._hideConflict();
       this._updateDirty();
+      this._dropDraft();
       return;
     }
     if (this.isDirty()) {
@@ -923,9 +1198,12 @@ class ViewerPanel {
   /** The file as it is on disk in the editor (only what changed), as the text an edit differs from. */
   _applyDiskContent(content) {
     this._hideConflict();
-    this._setEditorText(content);
+    clearTimeout(this._draftTimer);
+    this._applyShared(content);
     this._savedContent = this.getContent();
+    this._base = this._savedContent;
     this._updateDirty();
+    this._dropDraft();
     if (this.previewMode) this._renderPreview();
   }
 
@@ -945,7 +1223,7 @@ class ViewerPanel {
       bar.addEventListener('click', (e) => {
         const act = e.target.closest('[data-act]')?.dataset.act;
         if (act === 'reload') this._applyDiskContent(this._diskContent);
-        else if (act === 'keep') this._hideConflict();
+        else if (act === 'keep') this._keepMine();
         else if (act === 'compare') this._toggleCompare();
       });
       this.toolbar.el.after(bar);
@@ -953,6 +1231,14 @@ class ViewerPanel {
     }
     this.conflictEl.hidden = false;
     if (this._compareView) this._toggleCompare(true);
+  }
+
+  /** Keep Mine: the edits now start from the file as it is on disk. */
+  _keepMine() {
+    this._base = this._diskContent;
+    this._draftContent = null;
+    this._hideConflict();
+    this._flushDraft();
   }
 
   _hideConflict() {

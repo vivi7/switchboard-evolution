@@ -685,7 +685,12 @@ test('Exit Edit Mode drops the editor and what was not saved, and reads the diff
   await ctx.gitStartEdit({ id: 'p' }, state, repo, fakeBody(fakeList()), item);
   state.diffs.set(ctx.gitDiffKey(repo, 'unstaged', 'a.txt'), { diff: 'old' });
   views[0].view.text = 'unsaved\n';
+  const questions = [];
+  ctx.gitChangesConfirm = async (q) => { questions.push(q.confirm); return questions.length > 1; };
   await ctx.gitExitEdit({ id: 'p' }, state, repo, fakeBody(fakeList()), item);
+  assert.equal(state.editors.size, 1, 'Cancel stays in edit mode');
+  await ctx.gitExitEdit({ id: 'p' }, state, repo, fakeBody(fakeList()), item);
+  assert.deepEqual(questions, ['Discard', 'Discard']);
   assert.equal(views[0].view.destroyed, true);
   assert.equal(state.editors.size, 0);
   assert.equal(state.diffs.has(ctx.gitDiffKey(repo, 'unstaged', 'a.txt')), false);
@@ -738,4 +743,38 @@ test('a diff stays green and red as text without a file name, a highlighter, or 
   assert.equal(ctx.gitDiffLines(DIFF, { filename: 'x.js' }), plain);
   ctx.window.cmHighlightLines = () => null;
   assert.equal(ctx.gitDiffLines(DIFF, { filename: 'notes.unknown' }), plain);
+});
+
+test('unsaved text in edit mode is kept as a draft, comes back, and goes with a save', async () => {
+  const calls = [];
+  const { ctx, views } = editingContext(calls);
+  const drafts = new Map();
+  Object.assign(ctx.window.api, {
+    getDraft: filePath => drafts.get(filePath) || null,
+    setDraft: (filePath, draft) => { drafts.set(filePath, draft); return { ok: true }; },
+    removeDraft: filePath => drafts.delete(filePath),
+  });
+  const listeners = {};
+  ctx.window.addEventListener = (type, callback) => { listeners[type] = callback; };
+  ctx.shareViewerDraft = () => {};
+  ctx.window.cmSetText = (view, text) => { view.text = text; };
+  const state = ctx.gitTabState('p');
+  const repo = { path: '/repo', changes: [porcelain('src/a.js', ' M')] };
+  const item = { side: 'unstaged', change: repo.changes[0] };
+  const body = fakeBody(fakeList());
+  await ctx.gitStartEdit({ id: 'p' }, state, repo, body, item);
+  views[0].view.text = 'typed\n';
+  let held = false;
+  listeners.beforeunload({ preventDefault: () => { held = true; } });
+  assert.equal(held, false);
+  assert.deepEqual(plain(drafts.get('/repo/src/a.js')), { content: 'typed\n', base: 'a\nb\n' });
+
+  // As after a restart: another window's edit mode starts from the draft.
+  state.editors.clear();
+  await ctx.gitStartEdit({ id: 'p' }, state, repo, body, item);
+  const session = state.editors.get('/repo\0src/a.js');
+  assert.equal(views.at(-1).view.text, 'typed\n');
+  assert.equal(ctx.gitEditDirty(session), true);
+  await ctx.gitSaveEdit({ id: 'p' }, state, repo, body, item, session);
+  assert.equal(drafts.size, 0);
 });

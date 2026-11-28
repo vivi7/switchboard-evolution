@@ -243,6 +243,19 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+}
+
+/* Files with unsaved changes wait under this tab (files-view.js). */
+.sidebar-tab.has-unsaved::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e6e6f4;
 }
 
 .sidebar-tab svg {
@@ -5534,7 +5547,7 @@ button.cm-status-item:disabled { cursor: default; }
   align-items: center;
   gap: 22px;
   /* A narrow window scrolls the tabs sideways instead of cutting them off
-     (projects-view.js bindWorkspaceTabs): no scrollbar, a fade on the side that has more. */
+     (projects-view.js bindScrollingTabs): no scrollbar, a fade on the side that has more. */
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -5542,9 +5555,21 @@ button.cm-status-item:disabled { cursor: default; }
 }
 .ws-tabs::-webkit-scrollbar { display: none; }
 .ws-tabs > * { flex-shrink: 0; }
-.ws-tabs.more-right { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
-.ws-tabs.more-left { mask-image: linear-gradient(to right, transparent, #000 28px); }
-.ws-tabs.more-left.more-right { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+.ws-tabs.more-right, .kn-nav.more-right, .editor-tab-bar.more-right { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.ws-tabs.more-left, .kn-nav.more-left, .editor-tab-bar.more-left { mask-image: linear-gradient(to right, transparent, #000 28px); }
+.ws-tabs.more-left.more-right, .kn-nav.more-left.more-right, .editor-tab-bar.more-left.more-right { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+/* A scrolling bar and its arrows (projects-view.js addScrollArrows): each over the end that has more, on its fade. */
+.tabs-scroll { position: relative; display: flex; max-width: 100%; min-width: 0; }
+.tabs-scroll > .ws-tabs { flex: 1; }
+.tabs-arrow {
+  display: none; position: absolute; top: 0; bottom: 0; width: 24px; padding: 0; align-items: center; justify-content: center;
+  border: 1px solid rgba(255,255,255,0.14); border-radius: 7px; background: #23232d; color: #c8c8dc; cursor: pointer;
+}
+.tabs-arrow:hover { background: #2d2d3a; color: #fff; }
+.tabs-arrow--left { left: 0; }
+.tabs-arrow--right { right: 0; }
+.ws-tabs ~ .tabs-arrow { top: 7px; bottom: 7px; }
+.more-left ~ .tabs-arrow--left, .more-right ~ .tabs-arrow--right { display: flex; }
 
 .ws-tab {
   white-space: nowrap;
@@ -7935,6 +7960,74 @@ div.git-file-row.tree { padding: 4px 8px 4px calc(10px + var(--depth, 0) * 14px)
   min-height: 0;
 }
 
+/* ========== EDITOR TABS (editor-tabs.js) ========== */
+.editor-tabs { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.editor-tabs > .tabs-scroll { flex: none; background: #14141c; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.editor-tabs > .tabs-scroll:has(> .editor-tab-bar[hidden]) { display: none; }
+.tabs-scroll > .editor-tab-bar { flex: 1; }
+.editor-tab-bar {
+  display: flex;
+  flex: none;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.editor-tab-bar::-webkit-scrollbar { display: none; }
+.editor-tab-bar[hidden] { display: none; }
+.editor-tab {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+  max-width: 340px;
+  padding: 5px 6px 4px 10px;
+  border-right: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 2px solid transparent;
+  color: #8888a0;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.editor-tab:hover { color: #b0b0c4; background: rgba(255,255,255,0.03); }
+.editor-tab.active { color: #e6e6f4; background: #18181f; border-bottom-color: var(--accent); }
+.editor-tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.editor-tab-icon { display: flex; align-items: center; flex-shrink: 0; }
+.editor-tab-icon:empty { display: none; }
+.editor-tab-icon .file-type-icon { width: 14px; height: 14px; }
+.editor-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor-tab-close {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 10px;
+  line-height: 18px;
+  cursor: pointer;
+  visibility: hidden;
+}
+.editor-tab-close::before { content: '✕'; }
+.editor-tab-close:hover { background: rgba(255,255,255,0.1); }
+.editor-tab:hover .editor-tab-close,
+.editor-tab.active .editor-tab-close,
+.editor-tab.dirty .editor-tab-close,
+.editor-tab:focus-within .editor-tab-close { visibility: visible; }
+/* Unsaved changes: a dot where the ✕ is, until the pointer is on it. */
+.editor-tab.dirty .editor-tab-close::before { content: '●'; color: #e6e6f4; }
+.editor-tab.dirty .editor-tab-close:hover::before { content: '✕'; }
+.editor-tab-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.editor-tab-body > .ws-editor-empty[hidden],
+.editor-tab-panel[hidden] { display: none; }
+/* The tab names the file; the toolbar keeps its path. */
+.editor-tab-panel .viewer-toolbar-title,
+.editor-tab-panel .viewer-toolbar-dirty { display: none; }
+.file-panel-session { flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+
 /* ========== PROJECT PAGE: ENV TAB ========== */
 /* The Files tab's layout: the folders' local.env.sh on the left, the editor on the right. */
 .ws-env-rules {
@@ -9703,12 +9796,26 @@ body.project-window .ws-body:has(> .note-window-body) { padding: 0; overflow: hi
 .memory-item.is-missing .session-id { opacity: 0.5; }
 .memory-item.is-missing .session-meta { color: #c98a5e; }
 
-/* Pin and remove on a row; a pinned row's pin stays lit. */
-.files-pin-btn.on { color: color-mix(in srgb, var(--accent) 70%, white); }
+/* Pin and remove on a row; a pinned row's star stays lit, as in the Projects tab. */
+.files-pin-btn.on { color: #f5be3c; }
+/* The project a row under Opened is in, before the file's name. */
+.files-row-project {
+  display: inline-block;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  color: #8a8aa3;
+}
+.files-row-project-separator { color: #8a8aa3; }
 .files-remove-btn:hover { color: #ff7b8a; background: rgba(255,90,110,0.1); }
 
 /* Pinned rows are moved by dragging them: a line shows where one would go. */
-.files-pinned-group .memory-item[draggable="true"] { cursor: grab; }
+.memory-item.is-pinned[draggable="true"] { cursor: grab; }
+/* A pinned file's star shows without hovering; the other buttons wait for it. */
+.memory-item.is-pinned .session-actions { opacity: 1; }
+.memory-item.is-pinned:not(:hover):not(:focus-within) .session-actions { background: none; }
+.memory-item.is-pinned:not(:hover):not(:focus-within) .session-actions > :not(.files-pin-btn) { visibility: hidden; }
 .memory-item.is-dragging { opacity: 0.4; }
 /* Ordered by dragging (projects-view.js bindOrderDrag): the Starred section and a drawer's Pinned group. */
 [data-order-group].is-dragging { opacity: 0.4; }
@@ -9716,6 +9823,46 @@ body.project-window .ws-body:has(> .note-window-body) { padding: 0; overflow: hi
 [data-order-group].drop-after { box-shadow: 0 2px 0 0 var(--accent); }
 .memory-item.drop-before .session-row { box-shadow: 0 -2px 0 0 var(--accent); }
 .memory-item.drop-after .session-row { box-shadow: 0 2px 0 0 var(--accent); }
+
+/* A project's group: its pin shows on hover, and stays lit when pinned. */
+.files-project-pin { visibility: hidden; padding: 2px; }
+.project-header:hover .files-project-pin,
+.files-project-pin:focus-visible,
+.files-project-pin.on { visibility: visible; }
+.files-pinned-project .project-header { cursor: grab; }
+.files-pinned-project.is-dragging { opacity: 0.4; }
+.files-pinned-project.drop-before { box-shadow: 0 -2px 0 0 var(--accent); }
+.files-pinned-project.drop-after { box-shadow: 0 2px 0 0 var(--accent); }
+
+/* Rows selected to be opened together, and the bar that opens them. */
+.memory-item { user-select: none; }
+.memory-item.is-selected .session-row { background: rgb(from var(--accent) r g b / 0.16); border-radius: 6px; }
+.files-selection-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px 6px;
+  padding: 6px 10px;
+  border: 1px solid rgb(from var(--accent) r g b / 0.4);
+  border-radius: 8px;
+  background: #1c1c28;
+  color: #c0c0d8;
+  font-size: 12px;
+}
+.files-selection-bar span { flex: 1; }
+.files-selection-bar button {
+  padding: 3px 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.files-selection-bar button:hover { border-color: var(--accent); color: #e6e6f4; }
 
 /* A file dragged over the sidebar from outside the app: two halves, open here
    or in a window of its own. Fixed over the sidebar's box (files-drop.js). */
@@ -9770,7 +9917,8 @@ body.file-window .markdown-preview { flex: 1; min-height: 0; }
 /* ---- Node Knowledge tab (project-knowledge-view.js) ---- */
 .kn-body .mono, .kn-table td, .kn-mono { font-family: 'SF Mono', 'Fira Code', Menlo, monospace; font-size: 11px; }
 .kn-subnav { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.kn-nav { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+/* A narrow window scrolls the views sideways, as the project's tabs (projects-view.js bindScrollingTabs). */
+.kn-nav { max-width: 100%; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .kn-nav::-webkit-scrollbar { display: none; }
 .kn-nav .git-workspace-nav-btn { white-space: nowrap; }
 .kn-subnav-side { display: flex; align-items: center; gap: 10px; min-width: 0; }

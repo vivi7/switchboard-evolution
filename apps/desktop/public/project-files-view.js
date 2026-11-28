@@ -7,11 +7,11 @@
 // git, and adding a file to a chat). The editor belongs to the page, not to a
 // tab: switching tabs changes the tree and leaves the open file where it is.
 //
-// One ViewerPanel serves the whole page. Its DOM moves between renders rather
-// than being rebuilt, so an unsaved edit survives the re-render that every
-// projects-changed event triggers, and the file is not reloaded underneath
-// the cursor. The side editor and a diff view are kept the same way. Saving
-// CLAUDE.md or AGENTS.md of the project folder goes through
+// Each project's editor holds every file opened in it, each in a tab of its own
+// (editor-tabs.js). Its DOM moves between renders rather than being rebuilt, so
+// the re-render every projects-changed event triggers does not reload a file
+// underneath the cursor. The side editor and a diff view are kept the same way.
+// Saving CLAUDE.md or AGENTS.md of the project folder goes through
 // save-project-brief, which writes both files and every worktree's bridge copy.
 //
 // Depends on globals from projects-view.js (projectsUi, projectViewer, PICONS,
@@ -22,13 +22,15 @@
 // dialogs.js (launchTerminalSession, resolveDefaultSessionOptions),
 // file-actions.js (projectEntryPath, remapFileActionPath,
 // remapFileActionRelative, openUnsupportedFile), utils.js (escapeHtml,
-// shellEscape), viewer-panel.js and codemirror-bundle.js.
+// shellEscape), viewer-panel.js, editor-tabs.js and codemirror-bundle.js.
 
 const FILES_LIST_TTL_MS = 10 * 1000;
 // Files the brief names and the agent creates on demand; opening one from a
 // card creates it so there is something to edit.
 const PROJECT_OWN_FILES = ['plan.md', 'plan-tracker.md', 'todos.md', 'memory.md'];
-let projectEditor = null; // { host, panel, projectId, root, rel }
+// The editor of each project's Files tab, made when first needed: project id ->
+// { id, host, tabs, panel, root, rel }; the last three are of the file shown.
+const projectEditors = new Map();
 let projectSideEditor = null; // "Open to the Side": { host, panel, projectId, root, rel }
 let projectDiffView = null; // a comparison or a Timeline change shown in place of the editor
 let filesClipboard = null; // { mode: 'copy' | 'cut', root, rel, name, isDir }
@@ -117,18 +119,111 @@ function entryNameOf(rel, root) {
 
 // --- The editors ---
 
-function ensureProjectEditor() {
-  if (projectEditor) return projectEditor;
+function inProjectWindow() {
+  return typeof PROJECT_WINDOW !== 'undefined' && !!PROJECT_WINDOW;
+}
+
+/** Each project remembers its own open files; its window apart from the main one. */
+function projectEditorStorageKey(projectId, projectWindow = inProjectWindow()) {
+  return `editorTabs:${projectWindow ? 'project-window' : 'project'}:${projectId}`;
+}
+
+function ensureProjectEditor(projectId) {
+  const made = projectEditors.get(projectId);
+  if (made) return made;
   const host = document.createElement('div');
   host.className = 'ws-editor-panel';
-  const panel = new ViewerPanel(host, {
-    copyPath: true, copyContent: true, language: 'auto', storageKey: 'markdownPreviewMode',
-    onSave: (filePath, content) => saveProjectEditorFile(projectEditor, filePath, content),
-    // Go to Definition into another file of the same folder: opened as from the explorer.
-    openFile: (filePath, at) => openProjectEditorLocation(projectEditor, filePath, at),
+  const ed = {
+    id: projectId, host, tabs: null,
+    get panel() { return this.tabs.active?.panel || null; },
+    get root() { return this.tabs.active?.data.root || null; },
+    get rel() { return this.tabs.active?.data.rel || null; },
+  };
+  ed.tabs = new EditorTabs(host, {
+    storageKey: projectEditorStorageKey(projectId),
+    createPanel: (element, tab, shared) => new ViewerPanel(element, {
+      ...shared,
+      copyPath: true, copyContent: true, language: 'auto', storageKey: 'markdownPreviewMode',
+      onSave: (filePath, content, options) => saveProjectEditorFile({ ...tab.data, panel: tab.panel }, filePath, content, options),
+      // Go to Definition into another file: in a tab of its own.
+      openFile: (filePath, at) => openProjectEditorLocation(ed, filePath, at),
+    }),
+    // A tab picked cannot be while a diff is up, so this one follows a tab closed by a file action: the diff stays.
+    onSelect: (tab) => showProjectEditorTab(ed, tab, { keepDiff: true }),
+    projectName: (tab) => findTreeProject(tab.data.projectId)?.name || editorProjectName(tab.path),
+    onActivate: (tab) => followProjectEditorTab(ed, tab),
+    // A closed file is no longer the one its folder's tree has selected.
+    onRemove: ({ data }) => {
+      const project = findTreeProject(data.projectId);
+      const state = project && data.root ? filesState(project, data.root) : null;
+      if (state && state.selected === data.rel) state.selected = null;
+    },
   });
-  projectEditor = { host, panel, projectId: null, root: null, rel: null };
-  return projectEditor;
+  projectEditors.set(projectId, ed);
+  return ed;
+}
+
+/** The editors of every project with files open, of pages not shown since the start too. */
+function allProjectEditors() {
+  const projects = inProjectWindow()
+    ? [PROJECT_WINDOW.projectId]
+    : (typeof cachedProjectTreeAll !== 'undefined' ? cachedProjectTreeAll?.projects || [] : []).map(p => p.id);
+  for (const id of projects) {
+    if (localStorage.getItem(projectEditorStorageKey(id))) ensureProjectEditor(id);
+  }
+  return [...projectEditors.values()];
+}
+
+/** The project's tree marks the file of the tab shown. */
+function followProjectEditorTab(ed, tab) {
+  const project = findTreeProject(ed.id);
+  if (!project) return;
+  const mine = !!(tab && tab.data.projectId === project.id && tab.data.root);
+  if (mine) filesState(project, tab.data.root).selected = tab.data.rel;
+  if (selectedProject()?.id !== project.id) return;
+  markSelectedRow(mine && tab.data.root === currentFilesRoot(project) ? tab.data.rel : null);
+}
+
+/** Read a tab's file into it. False when it cannot be shown: the tab goes, and says why. */
+async function loadProjectEditorTab(ed, tab) {
+  const project = findTreeProject(tab.data.projectId);
+  let result;
+  if (project && tab.data.root) {
+    result = await readForEditor(project, tab.data.root, tab.data.rel);
+  } else {
+    // A file outside the project's folders, or of a project that is gone.
+    try { result = await window.api.readFileForPanel(tab.path); } catch (err) { result = { ok: false, error: err.message }; }
+  }
+  if (!ed.tabs.tabs.includes(tab)) return false;
+  if (tab.loaded) return true;
+  if (result?.ok) {
+    ed.tabs.fill(tab, result.content, result);
+    return true;
+  }
+  // Unsaved text of a file that is gone is still shown, to be saved again.
+  const draft = window.api.getDraft?.(tab.path);
+  if (draft) {
+    ed.tabs.fill(tab, draft.base, { missing: true });
+    return true;
+  }
+  ed.tabs.remove(tab);
+  alert(result?.error || 'Could not open the file.');
+  return false;
+}
+
+/** A tab picked, or brought back with the page: read when needed, then shown. */
+async function showProjectEditorTab(ed, tab, { keepDiff = false } = {}) {
+  const request = ed.request = (ed.request || 0) + 1;
+  if (!tab.loaded && !(await loadProjectEditorTab(ed, tab))) return;
+  if (request !== ed.request) return;
+  const diff = projectDiffView?.projectId === ed.id;
+  // The page may be another project's by now: its editor stays where it is.
+  if (selectedProject()?.id === ed.id && !(keepDiff && diff)) {
+    if (diff) closeDiffView({ restore: false });
+    const host = projectViewer?.querySelector('#ws-editor');
+    if (host && ed.host.parentElement !== host) host.replaceChildren(ed.host);
+  }
+  ed.tabs.activate(tab);
 }
 
 function ensureSideEditor() {
@@ -137,17 +232,17 @@ function ensureSideEditor() {
   host.className = 'ws-editor-panel';
   const panel = new ViewerPanel(host, {
     copyPath: true, copyContent: true, language: 'auto', storageKey: 'markdownPreviewMode',
-    onSave: (filePath, content) => saveProjectEditorFile(projectSideEditor, filePath, content),
+    onSave: (filePath, content, options) => saveProjectEditorFile(projectSideEditor, filePath, content, options),
     onClose: () => closeSideEditor(),
   });
   projectSideEditor = { host, panel, projectId: null, root: null, rel: null };
   return projectSideEditor;
 }
 
-function closeSideEditor() {
+function closeSideEditor({ discard = false } = {}) {
   const side = projectSideEditor;
   if (!side) return;
-  side.panel.destroy();
+  side.panel.destroy({ discard });
   side.projectId = side.root = side.rel = null;
   const pane = projectViewer?.querySelector('#ws-editor-side');
   if (pane) { pane.replaceChildren(); pane.hidden = true; }
@@ -158,15 +253,15 @@ function isBriefFile(ed, project) {
   return ed.root === project.root && (ed.rel === 'CLAUDE.md' || ed.rel === 'AGENTS.md');
 }
 
-async function saveProjectEditorFile(ed, filePath, content) {
-  const project = ed ? findTreeProject(ed.projectId) : null;
-  if (!project) return { ok: false };
-  const brief = isBriefFile(ed, project);
+async function saveProjectEditorFile(ed, filePath, content, options) {
+  if (!ed) return { ok: false };
+  const project = findTreeProject(ed.projectId);
+  const brief = !!project && isBriefFile(ed, project);
   let result;
   if (brief) {
     result = await window.api.saveProjectBrief(project.id, content);
   } else {
-    result = await window.api.saveFileForPanel(filePath, content);
+    result = await window.api.saveFileForPanel(filePath, content, options);
   }
   if (!result || result.error || result.ok === false) {
     alert(result?.error || 'Could not save the file.');
@@ -175,19 +270,14 @@ async function saveProjectEditorFile(ed, filePath, content) {
   // The brief comes back with its folder block restored when the user had
   // removed it; show what is on disk now.
   if (brief && typeof result.content === 'string' && result.content !== content) {
-    ed.panel.open(`${project.name} · ${ed.rel}`, filePath, result.content);
+    ed.panel.open(pathBasename(ed.rel), filePath, result.content, { fresh: true });
   }
   const saved = brief && typeof result.content === 'string' ? result.content : content;
-  if (ed.root === project.root && ['CLAUDE.md', 'plan.md', 'plan-tracker.md', 'todos.md'].includes(ed.rel)) {
+  if (project && ed.root === project.root && ['CLAUDE.md', 'plan.md', 'plan-tracker.md', 'todos.md'].includes(ed.rel)) {
     projectsUi.files.set(fileKey(project, ed.rel), { content: saved, at: Date.now() });
     renderPlanMeta(project);
   }
   return { ok: true };
-}
-
-function editorTitle(project, root, rel) {
-  const label = root === project.root ? project.name : `${project.name} · ${pathBasename(root)}`;
-  return `${label} · ${rel}`;
 }
 
 function markSelectedRow(rel) {
@@ -216,55 +306,56 @@ async function openFileInProjectEditor(project, rel, { allowExternal = false, ro
   const host = projectViewer?.querySelector('#ws-editor');
   if (!host) return;
   markSelectedRow(rel);
-  const ed = ensureProjectEditor();
+  const ed = ensureProjectEditor(project.id);
+  const shown = ed.request = (ed.request || 0) + 1;
   const filePath = projectEntryPath(root, rel);
-  const sameFile = ed.projectId === project.id && ed.root === root && ed.rel === rel && ed.panel.filePath === filePath;
-  // Unsaved changes in the file shown: Save, Don't Save or stay on it.
-  if (!sameFile && ed.panel.filePath && !(await ed.panel.confirmLeave())) {
-    state.selected = ed.projectId === project.id && ed.root === root ? ed.rel : null;
-    markSelectedRow(state.selected);
-    return;
-  }
-  if (state.openRequest !== request) return;
-  closeDiffView({ restore: false });
-  // Same file already open: keep the editor and whatever is typed in it.
-  if (sameFile) {
+  let tab = ed.tabs.tabs.find(t => t.data.root === root && t.data.rel === rel) || ed.tabs.find(filePath);
+  // Already open: its tab, with whatever is typed in it.
+  if (tab?.loaded) {
+    closeDiffView({ restore: false });
     host.replaceChildren(ed.host);
+    Object.assign(tab.data, { projectId: project.id, root, rel });
+    ed.tabs.activate(tab);
     return;
   }
   const result = await readForEditor(project, root, rel);
-  if (state.openRequest !== request || !host.isConnected || selectedProject()?.id !== project.id) return;
+  if (state.openRequest !== request || ed.request !== shown || !host.isConnected || selectedProject()?.id !== project.id) return;
   if (result?.code === 'PREVIEW_UNAVAILABLE') {
     // Restoring the Files tab must never launch another application.
-    state.selected = ed.projectId === project.id && ed.root === root ? ed.rel : null;
+    state.selected = ed.root === root ? ed.rel : null;
     markSelectedRow(state.selected);
-    if (ed.projectId === project.id && ed.panel.filePath) host.replaceChildren(ed.host);
+    if (ed.tabs.tabs.length) host.replaceChildren(ed.host);
     if (allowExternal) await openUnsupportedFile(result, filePath, root);
     return;
   }
-  if (!result?.ok) {
-    host.innerHTML = `<div class="ws-editor-empty">${escapeHtml(result?.error || 'Could not open the file.')}</div>`;
+  const path = tab?.path || result?.filePath || filePath;
+  // Unsaved text of a file that is gone is still shown, to be saved again.
+  const draft = result?.ok ? null : window.api.getDraft?.(path);
+  if (!result?.ok && !draft) {
+    const message = result?.error || 'Could not open the file.';
+    if (tab) ed.tabs.remove(tab);
+    if (ed.tabs.tabs.length) alert(message);
+    else host.innerHTML = `<div class="ws-editor-empty">${escapeHtml(message)}</div>`;
     return;
   }
-  ed.projectId = project.id;
-  ed.root = root;
-  ed.rel = rel;
+  closeDiffView({ restore: false });
   host.replaceChildren(ed.host);
-  ed.panel.open(editorTitle(project, root, rel), result.filePath || filePath, result.content, result);
+  tab = ed.tabs.add(path, { projectId: project.id, root, rel });
+  if (!tab.loaded) ed.tabs.fill(tab, draft ? draft.base : result.content, draft ? { missing: true } : result);
+  ed.tabs.activate(tab);
 }
 
-/**
- * A file of the folder the editor `ed` shows, opened as the explorer opens it,
- * at { line, column }. Another folder's file: false, and the editor opens it itself.
- */
+/** Go to Definition into another file: its tab, at { line, column }. Resolves to the tab's viewer. */
 async function openProjectEditorLocation(ed, filePath, { line, column } = {}) {
-  const project = selectedProject();
-  const root = ed.root;
+  const project = findTreeProject(ed.id);
+  const root = project ? filesRootFor(project, filePath) : null;
   const sep = root && root.includes('\\') && !root.includes('/') ? '\\' : '/';
-  if (!project || project.id !== ed.projectId || !root || !filePath.startsWith(root + sep)) return false;
-  await openFileInProjectEditor(project, filePath.slice(root.length + 1).split(sep).join('/'), { root });
-  if (ed.panel.filePath === filePath && line) ed.panel.goToLocation(line, column);
-  return true;
+  const data = root ? { projectId: project.id, root, rel: filePath.slice(root.length + 1).split(sep).join('/') } : {};
+  const tab = ed.tabs.find(filePath) || ed.tabs.add(filePath, data);
+  await showProjectEditorTab(ed, tab);
+  if (!tab.loaded) return null;
+  if (line) tab.panel.goToLocation(line, column);
+  return tab.panel;
 }
 
 /** "Open to the Side": the file in a second editor beside the first. */
@@ -282,7 +373,7 @@ async function openFileToSide(project, root, rel) {
     side.projectId = project.id;
     side.root = root;
     side.rel = rel;
-    side.panel.open(editorTitle(project, root, rel), result.filePath || filePath, result.content, result);
+    side.panel.open(pathBasename(rel), result.filePath || filePath, result.content, result);
   }
   pane.hidden = false;
   pane.replaceChildren(side.host);
@@ -326,8 +417,8 @@ function closeDiffView({ restore = true } = {}) {
   if (!restore) return;
   const host = projectViewer?.querySelector('#ws-editor');
   if (!host) return;
-  const ed = projectEditor;
-  if (ed?.projectId === diff.projectId && ed.panel.filePath) host.replaceChildren(ed.host);
+  const ed = projectEditors.get(diff.projectId);
+  if (ed?.tabs.tabs.length) host.replaceChildren(ed.host);
   else host.innerHTML = '<div class="ws-editor-empty">Pick a file to read or edit it here.</div>';
 }
 
@@ -385,25 +476,34 @@ async function applyProjectFileAction(change) {
       if (next === projectEntryPath(clip.root, clip.rel)) continue;
       if (clip === filesClipboard) filesClipboard = null; else filesCompareSource = null;
     }
-    for (const ed of [projectEditor, projectSideEditor]) {
-      if (!ed?.panel.filePath) continue;
-      const next = remapFileActionPath(ed.panel.filePath, change);
-      if (next === ed.panel.filePath) continue;
-      const project = findTreeProject(ed.projectId);
-      const root = next && project ? filesRootFor(project, next) : null;
-      if (root) {
-        ed.root = root;
-        ed.rel = relativeIn(root, next);
-        await ed.panel.relocate(editorTitle(project, root, ed.rel), next);
-      } else if (ed === projectSideEditor) {
-        closeSideEditor();
-      } else {
-        ed.panel.destroy();
-        ed.projectId = ed.root = ed.rel = null;
-        const host = projectViewer?.querySelector('#ws-editor');
-        if (host?.contains(ed.host)) host.innerHTML = '<div class="ws-editor-empty">Pick a file to read or edit it here.</div>';
+    for (const ed of allProjectEditors()) {
+      for (const tab of [...ed.tabs.tabs]) {
+        const next = remapFileActionPath(tab.path, change);
+        if (next === tab.path) continue;
+        // To the Trash: the tab goes, and its unsaved edits with it, as the question said.
+        if (!next) { ed.tabs.remove(tab, { discard: true }); continue; }
+        const project = findTreeProject(tab.data.projectId);
+        const root = project ? filesRootFor(project, next) : null;
+        await ed.tabs.relocate(tab, next, root ? { root, rel: relativeIn(root, next) } : { root: null, rel: null });
       }
     }
+    const side = projectSideEditor;
+    if (side?.panel.filePath) {
+      const next = remapFileActionPath(side.panel.filePath, change);
+      if (next !== side.panel.filePath) {
+        const project = findTreeProject(side.projectId);
+        const root = next && project ? filesRootFor(project, next) : null;
+        if (root) {
+          side.root = root;
+          side.rel = relativeIn(root, next);
+          await side.panel.relocate(pathBasename(side.rel), next);
+        } else {
+          closeSideEditor({ discard: !next });
+        }
+      }
+    }
+    // The sidebar's Files tab holds files of any folder (files-view.js).
+    if (typeof applyFilesViewFileAction === 'function') await applyFilesViewFileAction(change);
   }
   await rerenderFilesTree();
 }
@@ -1211,9 +1311,13 @@ async function renderFilesTab(project, body) {
 
   // The editors and a diff belong to the page: put back whichever is open.
   const host = body.querySelector('#ws-editor');
-  const ed = projectEditor;
-  if (projectDiffView?.projectId === project.id) host.replaceChildren(projectDiffView.el);
-  else if (ed?.projectId === project.id && ed.panel.filePath) host.replaceChildren(ed.host);
+  const ed = ensureProjectEditor(project.id);
+  if (projectDiffView?.projectId === project.id) {
+    host.replaceChildren(projectDiffView.el);
+  } else if (ed.tabs.tabs.length) {
+    host.replaceChildren(ed.host);
+    showProjectEditorTab(ed, ed.tabs.active || ed.tabs.lastUsed());
+  }
   const sideEditor = projectSideEditor;
   if (sideEditor?.projectId === project.id && sideEditor.panel.filePath) {
     const pane = body.querySelector('#ws-editor-side');
@@ -1235,7 +1339,7 @@ async function renderFilesTab(project, body) {
     renderTimeline(project, state);
     await renderFileTree(project, list, state);
   }
-  const hasEditor = projectDiffView?.projectId === project.id || (ed?.projectId === project.id && ed.panel.filePath);
+  const hasEditor = projectDiffView?.projectId === project.id || ed.tabs.tabs.length > 0;
   if (!hasEditor && state.selected && selectedProject()?.id === project.id) await openFileInProjectEditor(project, state.selected, { root });
 }
 

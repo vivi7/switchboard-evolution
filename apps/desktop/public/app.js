@@ -32,19 +32,6 @@ const plansFilters = document.getElementById('plans-filters');
 const statsViewer = document.getElementById('stats-viewer');
 const statsViewerBody = document.getElementById('stats-viewer-body');
 const memoryViewer = document.getElementById('memory-viewer');
-// The Files tab's editor (files-view.js): agent files and any file dropped on
-// the sidebar, text or not; its pop-out opens the file in a window of its own.
-const memoryPanel = new ViewerPanel(memoryViewer, {
-  copyPath: true, copyContent: true,
-  language: 'auto', storageKey: 'markdownPreviewMode',
-  onSave: (filePath, content) => saveFilesViewFile(filePath, content),
-  onPopOut: () => popOutCurrentFile(),
-  // Go to Definition into another file: opened as a click in the Files tab would.
-  openFile: async (filePath, { line, column }) => {
-    await openFileHere(filePath);
-    if (memoryPanel.filePath === filePath && line) memoryPanel.goToLocation(line, column);
-  },
-});
 const terminalArea = document.getElementById('terminal-area');
 const settingsViewer = document.getElementById('settings-viewer');
 const processViewer = document.getElementById('process-viewer');
@@ -1472,6 +1459,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       if (filesFilters) filesFilters.style.display = '';
       memoryContent.style.display = '';
       loadFiles();
+      restoreFilesEditor();
     }
   });
 });

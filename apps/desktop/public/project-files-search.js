@@ -9,7 +9,7 @@
 // root seen for the first time starts with the query last used in the project.
 //
 // Depends on project-files-view.js (filesState, filesUi, FICONS,
-// openFileInProjectEditor, projectEditor, setFilesSideView, filesKeyHint),
+// openFileInProjectEditor, projectEditors, setFilesSideView, filesKeyHint),
 // projects-view.js (PICONS, showContextMenu, showProjectTab, projectViewer),
 // file-icons.js (fileIconHtml), text-search.js (TextSearch) and utils.js.
 
@@ -384,8 +384,8 @@ async function openSearchMatch(project, root, file, match, row) {
   row?.closest('.ws-search-results')?.querySelectorAll('.ws-search-match.selected').forEach(el => el.classList.remove('selected'));
   row?.classList.add('selected');
   await openFileInProjectEditor(project, file.path, { root });
-  const ed = projectEditor;
-  if (ed?.projectId === project.id && ed.root === root && ed.rel === file.path) ed.panel.selectRange(match.line, match.column, match.length);
+  const ed = projectEditors.get(project.id);
+  if (ed?.root === root && ed.rel === file.path) ed.panel.selectRange(match.line, match.column, match.length);
 }
 
 function dismissSearchMatch(project, root, container, file, match) {
@@ -441,7 +441,7 @@ document.addEventListener('keydown', (e) => {
   const s = filesSearchState(project, root);
   if (e.code === 'KeyH') s.showReplace = true;
   // The editor's selection, as VS Code takes it, when it is on one line.
-  const view = projectEditor?.panel?.editorView;
+  const view = projectEditors.get(project.id)?.panel?.editorView;
   if (view && document.activeElement && view.dom.contains(document.activeElement)) {
     const sel = view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to);
     if (sel && !sel.includes('\n')) { s.query = sel; s.pending = true; }

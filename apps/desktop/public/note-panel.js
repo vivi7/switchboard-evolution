@@ -38,9 +38,9 @@ function noteEditorOptions(extra = {}) {
   };
 }
 
-async function saveProjectNote(filePath, content) {
+async function saveProjectNote(filePath, content, options) {
   let result;
-  try { result = await window.api.saveFileForPanel(filePath, content); } catch (err) { result = { ok: false, error: err.message }; }
+  try { result = await window.api.saveFileForPanel(filePath, content, options); } catch (err) { result = { ok: false, error: err.message }; }
   if (!result || result.error || result.ok === false) {
     alert(result?.error || 'Could not save the note.');
     return { ok: false };

@@ -6,6 +6,7 @@ const path = require('path');
 
 const {
   MAX_OPENED_FILES, normalizeOpenedFiles, addOpened, removeOpened, setPinned, movePinned,
+  setProjectPinned, movePinnedProject,
   displayFolder, describeFile, describeOpenedFiles, existingFilePath, checkDroppedPaths,
 } = require('../opened-files');
 
@@ -34,7 +35,7 @@ test('normalizeOpenedFiles keeps only absolute paths, once each', () => {
 
 test('normalizeOpenedFiles turns anything else into an empty list', () => {
   for (const value of [null, undefined, 'x', 3, [], { opened: 'x', pinned: {} }]) {
-    assert.deepEqual(normalizeOpenedFiles(value), { opened: [], pinned: [] });
+    assert.deepEqual(normalizeOpenedFiles(value), { opened: [], pinned: [], pinnedProjects: [] });
   }
 });
 
@@ -89,6 +90,33 @@ test('movePinned moves within the pinned files and clamps at both ends', () => {
   assert.deepEqual(movePinned(state, C, -3).pinned, [C, A, B]);
   assert.deepEqual(movePinned(state, path.resolve('/demo/none.md'), 0).pinned, [A, B, C]);
   assert.deepEqual(movePinned(state, B, 'x').pinned, [A, B, C]);
+});
+
+test('setProjectPinned adds at the end, once, and unpins', () => {
+  let state = setProjectPinned(null, '-demo-app', true);
+  state = setProjectPinned(state, '-demo-site', true);
+  state = setProjectPinned(state, '-demo-app', true);
+  assert.deepEqual(state.pinnedProjects, ['-demo-app', '-demo-site']);
+  state = setProjectPinned(state, '-demo-app', false);
+  assert.deepEqual(state.pinnedProjects, ['-demo-site']);
+  for (const key of ['', null, 42]) assert.deepEqual(setProjectPinned(state, key, true).pinnedProjects, ['-demo-site']);
+});
+
+test('movePinnedProject moves within the pinned projects and clamps at both ends', () => {
+  const state = { pinnedProjects: ['a', 'b', 'c'] };
+  assert.deepEqual(movePinnedProject(state, 'c', 0).pinnedProjects, ['c', 'a', 'b']);
+  assert.deepEqual(movePinnedProject(state, 'a', 99).pinnedProjects, ['b', 'c', 'a']);
+  assert.deepEqual(movePinnedProject(state, 'x', 0).pinnedProjects, ['a', 'b', 'c']);
+});
+
+test('changes to the files keep the pinned projects', () => {
+  let state = setProjectPinned(null, '-demo-app', true);
+  state = addOpened(state, [A, B], T1);
+  state = setPinned(state, A, true);
+  state = movePinned(state, A, 0);
+  state = removeOpened(state, B);
+  assert.deepEqual(state.pinnedProjects, ['-demo-app']);
+  assert.deepEqual(describeOpenedFiles(state).pinnedProjects, ['-demo-app']);
 });
 
 test('displayFolder shows the home folder as ~', () => {
